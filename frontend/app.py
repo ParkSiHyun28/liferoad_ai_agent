@@ -2,8 +2,12 @@
 대화 모드(Claude tool use)와 능동 모드(버튼 트리거) 둘 다 지원."""
 
 import os
+import sys
 import json
 from datetime import date
+
+# repo 루트를 import 경로에 넣는다. `streamlit run frontend/app.py`만으로 동작하게 한다.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
 from dotenv import load_dotenv
