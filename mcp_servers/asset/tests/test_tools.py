@@ -33,3 +33,19 @@ def test_pension_estimator_suman_treaty_false_cannot_receive():
     # 네팔 미체결 + 유학생(납부 0개월) → 귀국 시 수령 불가, 정직 안내
     assert result["numbers"]["can_receive"] is False
     assert result["card"] is not None  # 정직 안내 카드는 띄운다
+
+
+def test_remit_optimizer_minh_finds_cheapest_route():
+    result = tools.remit_optimizer(persona_id="minh")
+    # 월 송금 100만 원. 최저 경로는 WireBarley(1.6%).
+    assert result["numbers"]["best_route"] == "WireBarley"
+    assert result["numbers"]["best_fee_rate"] == data.REMIT_FEE_ALT
+    # 절감액 = (5.15% - 1.6%) * 100만 = 35,500원
+    assert result["numbers"]["monthly_saving_krw"] == 35_500
+    assert result["card"] is not None
+
+
+def test_remit_optimizer_suman_no_remit_returns_none_card():
+    result = tools.remit_optimizer(persona_id="suman")
+    # 수만은 월 송금 0 → 비교 의미 없음, card None
+    assert result["card"] is None

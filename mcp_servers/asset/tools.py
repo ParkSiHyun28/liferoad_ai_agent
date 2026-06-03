@@ -95,3 +95,44 @@ def pension_estimator(persona_id: str) -> dict:
             "metric": f"취업전환 가능성 {int(data.STUDENT_VISA_CONVERT_RATE*100)}.4%",
         },
     }
+
+
+def remit_optimizer(persona_id: str) -> dict:
+    """송금 수수료와 경로를 비교해 최저비용 경로를 안내한다.
+    커버 자산종: 송금."""
+    p = get_persona(persona_id)
+    monthly = p["monthly_remit_krw"]
+    routes = sorted(data.REMIT_ROUTES, key=lambda r: r["fee_rate"])
+    best = routes[0]
+    default = next(r for r in data.REMIT_ROUTES if r["name"] == "은행 한도제한계좌")
+    saving = int((default["fee_rate"] - best["fee_rate"]) * monthly)
+    numbers = {
+        "monthly_remit_krw": monthly,
+        "default_fee_rate": default["fee_rate"],
+        "best_route": "WireBarley" if best["name"] == "WireBarley" else best["name"],
+        "best_fee_rate": best["fee_rate"],
+        "monthly_saving_krw": saving,
+        "annual_saving_krw": saving * 12,
+    }
+    if monthly == 0:
+        return {
+            "summary": f"{p['name']}님은 정기 송금 내역이 없어 경로 비교가 필요하지 않습니다.",
+            "detail": "송금 발생 시 최저비용 경로를 다시 안내합니다.",
+            "numbers": numbers,
+            "card": None,
+        }
+    return {
+        "summary": f"송금 경로를 {best['name']}로 바꾸면 매달 {_won(saving)}을 아낍니다.",
+        "detail": (
+            f"현재 은행 한도제한계좌 경로는 수수료율 {default['fee_rate']*100:.2f}%입니다. "
+            f"{best['name']} 경로는 {best['fee_rate']*100:.1f}%입니다. "
+            f"월 송금 {_won(monthly)} 기준 매달 {_won(saving)}, 연간 약 {_won(saving*12)}을 절감합니다."
+        ),
+        "numbers": numbers,
+        "card": {
+            "icon": "💸",
+            "head": "송금 비용 절반으로 줄일 수 있습니다",
+            "body": f"현재 경로({default['fee_rate']*100:.2f}%) 대신 {best['name']}({best['fee_rate']*100:.1f}%)를 쓰면 매달 {_won(saving)} 아낍니다. 연간 약 {_won(saving*12)} 절감.",
+            "metric": f"경로 {len(data.REMIT_ROUTES)}개 비교 완료",
+        },
+    }
