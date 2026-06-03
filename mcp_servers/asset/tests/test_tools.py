@@ -64,3 +64,17 @@ def test_credit_builder_below_minimum_not_complete():
     # 3개월 = 최소(6) 미달
     assert result["numbers"]["profile_complete"] is False
     assert result["numbers"]["profile_started"] is False
+
+
+def test_deadline_radar_minh_computes_days_to_exit():
+    # 기준일 2026-10-03, 출국 2027-01 → 약 D-90
+    result = tools.deadline_radar(persona_id="minh", as_of="2026-10-03")
+    assert result["numbers"]["days_to_exit"] > 0
+    assert result["numbers"]["has_severance_insurance"] is True
+    assert result["card"] is not None
+
+
+def test_deadline_radar_suman_no_severance_insurance():
+    result = tools.deadline_radar(persona_id="suman", as_of="2026-10-03")
+    # 유학생은 출국만기보험 대상 아님
+    assert result["numbers"]["has_severance_insurance"] is False

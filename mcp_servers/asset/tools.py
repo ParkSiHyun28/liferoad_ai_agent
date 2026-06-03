@@ -173,3 +173,72 @@ def credit_builder(persona_id: str, months_accrued: int = 0) -> dict:
         "numbers": numbers,
         "card": {"icon": "📈", "head": head, "body": body, "metric": metric},
     }
+
+
+def _months_to_severance(p: dict, as_of: date) -> int:
+    """입국일부터 기준일까지 개월 수. 출국만기보험 적립 개월 추정."""
+    entry_y, entry_m = map(int, p["entry_date"].split("-"))
+    return (as_of.year - entry_y) * 12 + (as_of.month - entry_m)
+
+
+def deadline_radar(persona_id: str, as_of: str) -> dict:
+    """반환일시금과 출국만기보험 청구 마감 D-Day를 추적한다.
+    as_of는 기준일 'YYYY-MM-DD' 문자열. 커버 자산종: 연금, 보험."""
+    p = get_persona(persona_id)
+    today = date.fromisoformat(as_of)
+    exit_y, exit_m = map(int, p["exit_plan"].split("-"))
+    exit_date = date(exit_y, exit_m, 1)
+    days_to_exit = (exit_date - today).days
+    # E-9 근로자만 출국만기보험 대상 (월 통상임금 8.3% 적립)
+    has_insurance = p["visa"] == "E-9"
+    insurance_total = 0
+    if has_insurance:
+        months = _months_to_severance(p, today)
+        insurance_total = int(p["monthly_wage_krw"] * data.SEVERANCE_INSURANCE_RATE * months)
+    numbers = {
+        "as_of": as_of,
+        "exit_plan": p["exit_plan"],
+        "days_to_exit": days_to_exit,
+        "has_severance_insurance": has_insurance,
+        "severance_insurance_total_krw": insurance_total,
+        "claim_deadline_years": 3,  # 소멸시효 3년
+    }
+    if not has_insurance:
+        return {
+            "summary": f"{p['name']}님은 출국만기보험 대상이 아닙니다. 출국까지 D-{days_to_exit}.",
+            "detail": (
+                f"출국만기보험은 E-9 사업장 근로자 의무 가입 대상입니다. "
+                f"{p['visa']} 비자는 해당하지 않습니다. 출국 예정일은 {p['exit_plan']}이고 현재 D-{days_to_exit}입니다."
+            ),
+            "numbers": numbers,
+            "card": None,
+        }
+    return {
+        "summary": f"출국만기보험 약 {_won(insurance_total)} 적립 중. 출국까지 D-{days_to_exit}, 청구 마감 소멸시효 3년.",
+        "detail": (
+            f"E-9 사업장은 출국만기보험 의무 가입 대상입니다. 월 통상임금의 {data.SEVERANCE_INSURANCE_RATE*100:.1f}%가 적립됩니다. "
+            f"현재까지 약 {_won(insurance_total)} 적립 추정. 출국 예정일 {p['exit_plan']} 기준 D-{days_to_exit}입니다. "
+            f"소멸시효는 출국일로부터 3년이지만 청구를 모르면 소멸 위험이 있습니다. "
+            f"참고로 미청구 휴면보험금은 307.6억 원 규모이고 반환율은 30%에 그칩니다."
+        ),
+        "numbers": numbers,
+        "card": {
+            "icon": "🏦",
+            "head": f"출국만기보험 약 {_won(insurance_total)} 적립 중",
+            "body": "출국 후 3년 내 청구 필수. 지금 수령 절차를 미리 확인하세요.",
+            "metric": f"출국까지 D-{days_to_exit}",
+        },
+    }
+
+
+# tool 레지스트리. server.py와 app.py가 이 목록으로 tool을 등록한다.
+TOOL_REGISTRY = {
+    "deadline_radar": deadline_radar,
+    "pension_estimator": pension_estimator,
+    "collateral_calc": collateral_calc,
+    "remit_optimizer": remit_optimizer,
+    "credit_builder": credit_builder,
+}
+
+# 능동 모드에서 먼저 호출하는 트리거 tool (호출 순서)
+ACTIVE_TOOLS = ["deadline_radar", "remit_optimizer"]
