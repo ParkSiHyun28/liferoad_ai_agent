@@ -49,3 +49,18 @@ def test_remit_optimizer_suman_no_remit_returns_none_card():
     result = tools.remit_optimizer(persona_id="suman")
     # 수만은 월 송금 0 → 비교 의미 없음, card None
     assert result["card"] is None
+
+
+def test_credit_builder_suman_thin_filer_starts_accrual():
+    result = tools.credit_builder(persona_id="suman", months_accrued=18)
+    # 18개월 = 완성 기준 도달
+    assert result["numbers"]["months_accrued"] == 18
+    assert result["numbers"]["profile_complete"] is True
+    assert result["card"] is not None
+
+
+def test_credit_builder_below_minimum_not_complete():
+    result = tools.credit_builder(persona_id="suman", months_accrued=3)
+    # 3개월 = 최소(6) 미달
+    assert result["numbers"]["profile_complete"] is False
+    assert result["numbers"]["profile_started"] is False

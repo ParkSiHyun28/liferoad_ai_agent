@@ -136,3 +136,40 @@ def remit_optimizer(persona_id: str) -> dict:
             "metric": f"경로 {len(data.REMIT_ROUTES)}개 비교 완료",
         },
     }
+
+
+def credit_builder(persona_id: str, months_accrued: int = 0) -> dict:
+    """월세와 통신비와 공과금을 대안신용 데이터로 축적한다. 축적 개월 기준 프로필 형성도를 추정한다.
+    커버 자산종: 신용."""
+    p = get_persona(persona_id)
+    started = months_accrued >= data.CREDIT_PROFILE_MIN_MONTHS
+    complete = months_accrued >= data.CREDIT_PROFILE_FULL_MONTHS
+    numbers = {
+        "months_accrued": months_accrued,
+        "min_months": data.CREDIT_PROFILE_MIN_MONTHS,
+        "full_months": data.CREDIT_PROFILE_FULL_MONTHS,
+        "profile_started": started,
+        "profile_complete": complete,
+    }
+    if complete:
+        head = f"{months_accrued}개월 납부 이력으로 신용 프로필 완성"
+        body = "JB 외국인 전용 대출과 카드 심사에 바로 활용 가능합니다. 취업 후 신용대출도 준비됩니다."
+        metric = f"대안신용 데이터 {months_accrued}개월치"
+    elif started:
+        head = "대안신용 등급 형성 시작"
+        body = f"{months_accrued}개월 납부 이력 축적. {data.CREDIT_PROFILE_FULL_MONTHS}개월 도달 시 프로필 완성됩니다."
+        metric = f"신용데이터 {months_accrued}개월치"
+    else:
+        head = "오늘부터 신용 쌓기 시작"
+        body = f"월세와 통신비 납부 이력을 신용데이터로 연동했습니다. {data.CREDIT_PROFILE_MIN_MONTHS}개월 후 JB 대출 심사에서 활용됩니다."
+        metric = "신용데이터 연동 완료"
+    return {
+        "summary": f"{p['name']}님의 월세와 통신비 납부 이력을 대안신용으로 축적합니다.",
+        "detail": (
+            f"{p['name']}님은 소득이 적어 신용이력이 거의 없는 Thin Filer입니다. "
+            f"월세와 통신비와 공과금을 KCB 마이데이터로 연동해 대안신용 데이터로 축적합니다. "
+            f"현재 {months_accrued}개월 축적. {data.CREDIT_PROFILE_MIN_MONTHS}개월 이상이면 JB 외국인 전용 신용평가에 활용할 수 있습니다."
+        ),
+        "numbers": numbers,
+        "card": {"icon": "📈", "head": head, "body": body, "metric": metric},
+    }
