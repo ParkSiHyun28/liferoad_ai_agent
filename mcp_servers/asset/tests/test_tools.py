@@ -78,3 +78,14 @@ def test_deadline_radar_suman_no_severance_insurance():
     result = tools.deadline_radar(persona_id="suman", as_of="2026-10-03")
     # 유학생은 출국만기보험 대상 아님
     assert result["numbers"]["has_severance_insurance"] is False
+
+
+def test_every_tool_has_schema():
+    from mcp_servers.asset import schemas
+    from mcp_servers.asset.tools import TOOL_REGISTRY
+    for name in TOOL_REGISTRY:
+        assert name in schemas.TOOL_SCHEMAS, f"{name} 스키마 누락"
+        s = schemas.TOOL_SCHEMAS[name]
+        assert s["name"] == name
+        assert "description" in s
+        assert s["input_schema"]["type"] == "object"
