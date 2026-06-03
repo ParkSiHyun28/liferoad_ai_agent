@@ -37,6 +37,10 @@ python -m pytest -v
 4. tools.py의 함수를 자기 부문 tool로 바꾼다. 입출력 규약은 그대로 지킨다.
 5. test_tools.py로 검증한 뒤 PR을 올린다.
 
+### AI(LLM)에게 작업을 맡길 경우
+자기 LLM에게 이렇게 시키면 된다: **"이 repo를 읽고 AGENT_BRIEF.md 지시를 따라줘: https://github.com/ParkSiHyun28/liferoad_ai_agent"**
+`AGENT_BRIEF.md`는 AI에게 주는 작업 지시문이다. AI가 그 문서를 읽고 부문 작업을 안내하고 코드를 작성한다.
+
 ## 자산 부문 tool
 - deadline_radar: 반환일시금과 출국만기보험 마감 D-Day 추적 (능동)
 - pension_estimator: 국민연금 반환일시금 산출 (협정 체결 여부 반영)
