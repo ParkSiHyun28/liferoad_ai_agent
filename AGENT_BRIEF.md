@@ -4,7 +4,22 @@
 
 ---
 
-## 0. AI에게 — 먼저 이것부터
+## 0. AI에게 — 반드시 지킬 규칙 (먼저 이것부터)
+
+> 아래 규칙은 협상 대상이 아닙니다. 어기면 세 부문을 하나로 합칠 때 통합이 깨지고 작업이 폐기됩니다. 작업을 시작하기 전에 읽고, 작업이 끝나기 전에 다시 점검하세요.
+
+**절대 금지 (이 중 하나라도 어기면 작업 실패로 간주):**
+1. `shared/personas.py`를 수정하지 마세요. 두 페르소나(minh, suman)는 통합 시연의 공용 기준입니다. 새 필드가 꼭 필요하면 작업을 멈추고 팀원에게 "자산 담당자와 협의가 필요하다"고 보고하세요. 임의로 바꾸지 마세요.
+2. `shared/system_prompt.py`를 수정하지 마세요. 부문별로 다른 프롬프트를 쓰면 출력 톤이 깨집니다.
+3. `mcp_servers/asset/` 폴더를 수정하지 마세요. 자산 부문은 완성된 표준 예시입니다. 읽고 본뜨기만 하세요.
+4. tool 출력 dict의 형식을 바꾸지 마세요. 모든 tool은 `summary`, `detail`, `numbers`, `card` 4개 키를 가진 dict를 반환합니다. card는 None이거나 `icon`, `head`, `body`, `metric` 4키 dict입니다.
+5. `tests/test_contract.py`를 수정하거나 삭제하지 마세요. 이 파일은 위 규칙을 기계적으로 검사하는 가드레일입니다. 테스트가 실패하면 테스트를 고치지 말고 당신의 코드를 규약에 맞게 고치세요.
+
+**이 규칙이 지켜졌는지 확인하는 법**: 작업 후 `python -m pytest`를 돌리세요. `tests/test_contract.py`가 통과해야 합니다. 빨간색이 뜨면 규약을 어긴 것입니다. 통과할 때까지 코드를 고치세요.
+
+---
+
+## 0-1. AI에게 — 프로젝트 소개
 
 당신은 My LifeRoad 프로젝트에서 한 팀원의 작업을 돕는 AI 비서입니다. 이 프로젝트는 데이콘 JB금융그룹 Fin:AI Challenge 출전작입니다. 외국인 금융 라이프케어 AI 에이전트입니다.
 
@@ -69,9 +84,9 @@ mcp_servers/<부문>/
 `tests/test_tools.py`에 각 tool 단위 테스트를 씁니다. mock 입력에 대해 출력 dict의 numbers 값과 card 유무를 검증합니다. 자산 부문 테스트가 예시입니다.
 ```bash
 source .venv/bin/activate
-python -m pytest mcp_servers/<부문>/tests/ -v
+python -m pytest -v
 ```
-전부 통과해야 합니다.
+**전체 테스트가 통과해야 합니다.** 자기 부문 테스트뿐 아니라 repo 루트의 `tests/test_contract.py`(공용 규약 가드레일)도 통과해야 합니다. 이 가드레일은 당신이 만든 부문의 모든 tool을 자동으로 찾아 출력 형식을 검사합니다. 빨간색이 뜨면 0절의 규칙을 어긴 것이니 코드를 고쳐서 통과시키세요.
 
 ### 단계 6: 통합 (자산 담당자가 함, 팀원은 안 해도 됨)
 `frontend/app.py`에 부문 import를 한 줄 추가하면 Claude가 그 부문 tool도 호출합니다. 이 작업은 합칠 때 자산 담당자가 합니다. 팀원은 자기 폴더만 완성하면 됩니다.
@@ -104,9 +119,17 @@ python -m pytest -v   # 자산 부문 11개 통과 확인 (작업 시작 전 정
 
 ## 5. AI에게 — 마지막 확인
 
-부문 폴더를 다 만들었으면 팀원에게 다음을 보고하세요.
+부문 폴더를 다 만들었으면 끝내기 전에 0절의 금지 규칙을 한 항목씩 다시 점검하세요. 다음을 스스로 확인합니다.
+- [ ] `shared/personas.py`를 건드리지 않았다.
+- [ ] `shared/system_prompt.py`를 건드리지 않았다.
+- [ ] `mcp_servers/asset/`를 건드리지 않았다.
+- [ ] 모든 tool이 summary, detail, numbers, card 4키 dict를 반환한다.
+- [ ] `tests/test_contract.py`를 수정하지 않았다.
+- [ ] `python -m pytest`가 전부 통과한다(가드레일 포함).
+
+위 6개가 전부 충족되면 팀원에게 다음을 보고하세요.
 - 만든 tool 목록과 각 tool이 하는 일.
-- pytest 통과 결과.
+- `python -m pytest` 통과 결과(가드레일 통과 포함).
 - 통합은 자산 담당자가 한다는 안내.
 
-규약(CONTRACT.md)을 어긴 부분이 없는지 스스로 점검한 뒤 보고하세요. 특히 tool 출력 dict의 4개 키와 persona_id 규약을 확인하세요.
+하나라도 충족 안 되면 보고하지 말고 코드를 고쳐서 충족시키세요.

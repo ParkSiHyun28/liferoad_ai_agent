@@ -48,3 +48,6 @@ persona_id 프로퍼티는 enum ["minh", "suman"]로 고정한다.
 
 ## 통합
 frontend/app.py가 각 부문의 TOOL_REGISTRY와 TOOL_SCHEMAS를 import 해 Claude에 전달한다. 같은 규약을 지키면 부문 추가 시 import 한 줄만 늘면 된다.
+
+## 가드레일 (규약 위반 자동 차단)
+repo 루트 `tests/test_contract.py`가 이 규약을 기계적으로 검사한다. 페르소나 핵심 값 동결과 모든 부문 tool의 출력 4키 형식을 자동으로 확인한다. 부문을 새로 추가하면 그 부문 tool도 자동 검사 대상이 된다. `python -m pytest`로 돌려 통과하는지 확인한다. 이 파일은 수정하지 않는다. 위반 시 테스트가 아니라 코드를 고친다.
