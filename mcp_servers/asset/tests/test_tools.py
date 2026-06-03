@@ -18,3 +18,18 @@ def test_collateral_calc_minh_has_no_deposit():
     # 민은 잔고 0 → 한도 0, card는 None (담보 없음)
     assert result["numbers"]["loan_limit_krw"] == 0
     assert result["card"] is None
+
+
+def test_pension_estimator_minh_treaty_false_can_receive():
+    result = tools.pension_estimator(persona_id="minh")
+    # 베트남 미체결 → 수령 가능. 58개월 * 85,517 = 4,959,986 ≈ 496만
+    assert result["numbers"]["can_receive"] is True
+    assert result["numbers"]["estimated_refund_krw"] == 58 * data.PENSION_MONTHLY_REFUND_KRW
+    assert result["card"] is not None
+
+
+def test_pension_estimator_suman_treaty_false_cannot_receive():
+    result = tools.pension_estimator(persona_id="suman")
+    # 네팔 미체결 + 유학생(납부 0개월) → 귀국 시 수령 불가, 정직 안내
+    assert result["numbers"]["can_receive"] is False
+    assert result["card"] is not None  # 정직 안내 카드는 띄운다

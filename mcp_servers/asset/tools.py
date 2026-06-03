@@ -45,3 +45,53 @@ def collateral_calc(persona_id: str) -> dict:
             "metric": f"담보대출 한도 {_won(limit)}",
         },
     }
+
+
+def pension_estimator(persona_id: str) -> dict:
+    """국민연금 반환일시금 예상액을 산출한다. 사회보장협정 체결 여부를 반영한다.
+    커버 자산종: 연금."""
+    p = get_persona(persona_id)
+    months = p["pension_months"]
+    treaty = p["social_security_treaty"]
+    # 협정 미체결(treaty False)이면 반환일시금 수령 대상. 단 납부월수 0이면 받을 게 없다.
+    can_receive = (not treaty) and months > 0
+    refund = months * data.PENSION_MONTHLY_REFUND_KRW
+    numbers = {
+        "pension_months": months,
+        "treaty": treaty,
+        "can_receive": can_receive,
+        "estimated_refund_krw": refund,
+    }
+    if can_receive:
+        return {
+            "summary": f"{p['name']}님은 귀국 시 국민연금 반환일시금 약 {_won(refund)}을 받을 수 있습니다.",
+            "detail": (
+                f"{p['country']}은 한국과 사회보장협정이 미체결이라 {p['visa']} 근로자는 귀국 시 반환일시금 수령 대상입니다. "
+                f"납부 {months}개월 기준 예상 수령액은 약 {_won(refund)}입니다. "
+                f"2023년 외국인 반환일시금 총 지급액은 3,294억 원 규모입니다."
+            ),
+            "numbers": numbers,
+            "card": {
+                "icon": "🏛️",
+                "head": f"귀국 시 반환일시금 약 {_won(refund)} 수령 가능",
+                "body": f"납부 {months}개월치. 출국 후 청구하면 받습니다. 신청서 작성을 도와드립니다.",
+                "metric": f"예상 수령 {_won(refund)}",
+            },
+        }
+    # 수령 불가 (협정 미체결이지만 유학생이라 납부 이력 없음, 또는 협정 체결국)
+    return {
+        "summary": f"{p['name']}님은 귀국 시 국민연금 반환일시금을 받기 어렵습니다.",
+        "detail": (
+            f"{p['country']}은 한국과 사회보장협정이 미체결입니다. "
+            f"현재 납부 이력({months}개월)으로는 귀국 시 반환일시금 수령이 어렵습니다. "
+            f"단 취업비자(E-7)로 전환해 한국에 남으면 납부 이력이 수령으로 이어질 수 있습니다. "
+            f"유학생 취업전환율은 {int(data.STUDENT_VISA_CONVERT_RATE*100)}.4%입니다. 이 사실을 숨기지 않고 안내합니다."
+        ),
+        "numbers": numbers,
+        "card": {
+            "icon": "⚖️",
+            "head": "귀국하면 연금 돌려받기 어렵습니다",
+            "body": f"{p['country']}-한국 협정 미체결. 단 E-7 취업전환 시 납부 이력이 수령으로 이어집니다. 취업비자 전환 도움 필요하면 알려주세요.",
+            "metric": f"취업전환 가능성 {int(data.STUDENT_VISA_CONVERT_RATE*100)}.4%",
+        },
+    }
