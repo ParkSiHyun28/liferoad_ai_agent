@@ -24,7 +24,7 @@ bridge_secrets()
 
 import random
 
-from shared.system_prompt import build_system_prompt, LANGUAGES, default_lang_for_persona
+from shared.system_prompt import build_system_prompt, LANGUAGES, default_lang_for_persona, detect_lang
 from shared.personas import (
     PERSONAS, get_persona, all_personas, make_random_personas, register_personas,
 )
@@ -139,14 +139,17 @@ persona_id = st.sidebar.selectbox(
     format_func=lambda k: f"[{PERS[k]['flag']}] {PERS[k]['name']} ({PERS[k]['visa']} {PERS[k]['role']})",
 )
 
-# 답변 언어. 기본은 한국어로 고정한다(심사위원과 팀이 바로 읽게).
-# 외국인 모국어로 보려면 사용자가 드롭다운에서 직접 고른다.
-lang_codes = list(LANGUAGES.keys())
+# 답변 언어. 기본은 '자동감지'다. 사용자가 입력한 질문의 언어를 감지해 같은 언어로 답한다.
+# 외국인이 모국어로 물으면 모국어로, 심사위원이 한국어로 물으면 한국어로 자연히 분기된다.
+# 특정 언어로 고정해 보고 싶으면 드롭다운에서 그 언어를 직접 골라 자동감지를 끈다(수동 오버라이드).
+lang_codes = ["auto"] + list(LANGUAGES.keys())
+LANG_LABELS = {"auto": "자동감지 (질문 언어 따라감)"}
+LANG_LABELS.update({c: LANGUAGES[c]["name"] for c in LANGUAGES})
 lang = st.sidebar.selectbox(
     "답변 언어",
     options=lang_codes,
-    index=lang_codes.index(st.session_state.get("lang", "ko")),
-    format_func=lambda c: LANGUAGES[c]["name"],
+    index=lang_codes.index(st.session_state.get("lang", "auto")),
+    format_func=lambda c: LANG_LABELS[c],
 )
 st.session_state["lang"] = lang
 
@@ -194,6 +197,100 @@ def active_plan(persona_id: str) -> list[tuple[str, dict]]:
     return plan
 
 
+# 다음 행동 선택지 버튼에 쓸 다국어 행동 문구.
+# tool 이름 -> 언어별 "이 행동을 해줘" 형태의 짧은 제안 문구.
+# 자동감지된 응답 언어(ko/vi/ne/en)에 맞춰 버튼 라벨을 그 언어로 보여준다.
+ACTION_LABELS = {
+    "deadline_radar": {
+        "ko": "마감 기한 확인하기", "en": "Check upcoming deadlines",
+        "vi": "Kiểm tra hạn chót sắp tới", "ne": "आउँदो म्याद जाँच गर्नुहोस्",
+    },
+    "pension_estimator": {
+        "ko": "연금 반환일시금 계산하기", "en": "Estimate my pension refund",
+        "vi": "Tính tiền hoàn bảo hiểm hưu trí", "ne": "पेन्सन फिर्ता रकम अनुमान गर्नुहोस्",
+    },
+    "collateral_calc": {
+        "ko": "예금담보대출 한도 계산하기", "en": "Calculate my loan limit",
+        "vi": "Tính hạn mức vay thế chấp", "ne": "ऋण सीमा गणना गर्नुहोस्",
+    },
+    "remit_optimizer": {
+        "ko": "송금 비용 줄이기", "en": "Lower my remittance cost",
+        "vi": "Giảm phí chuyển tiền", "ne": "रेमिट्यान्स लागत घटाउनुहोस्",
+    },
+    "credit_builder": {
+        "ko": "신용 점수 쌓기 시작하기", "en": "Start building my credit",
+        "vi": "Bắt đầu xây dựng tín dụng", "ne": "क्रेडिट निर्माण सुरु गर्नुहोस्",
+    },
+    "compliance_reason": {
+        "ko": "비자 취업 가능 여부 확인하기", "en": "Check my visa work eligibility",
+        "vi": "Kiểm tra điều kiện làm việc theo visa", "ne": "भिसा कामको योग्यता जाँच गर्नुहोस्",
+    },
+    "form_autofill": {
+        "ko": "신청서 자동으로 작성하기", "en": "Auto-fill the application form",
+        "vi": "Tự động điền đơn", "ne": "आवेदन फारम स्वतः भर्नुहोस्",
+    },
+    "perception_parse": {
+        "ko": "내 서류 점검하기", "en": "Review my documents",
+        "vi": "Kiểm tra giấy tờ của tôi", "ne": "मेरा कागजात जाँच गर्नुहोस्",
+    },
+}
+
+# 선택지 블럭 안내 문구(헤더)도 응답 언어로.
+NEXT_HEADER = {
+    "ko": "다음으로 무엇을 도와드릴까요?",
+    "en": "What would you like me to do next?",
+    "vi": "Tiếp theo bạn muốn tôi làm gì?",
+    "ne": "अब म तपाईंलाई के मद्दत गरूँ?",
+}
+
+
+def next_actions(persona_id: str, used_tools: set[str], limit: int = 3) -> list[tuple[str, dict]]:
+    """이 페르소나에게 의미 있는 '다음 행동' 후보를 만든다(하이브리드 방식).
+
+    active_plan으로 페르소나 속성에 맞는 tool 계획을 만든 뒤,
+    방금 답변에서 이미 실행한 tool(used_tools)은 제거해 자연스러운 다음 단계만 남긴다.
+    ACTION_LABELS에 문구가 정의된 tool만 버튼으로 노출한다.
+    최대 limit개까지 보여준다(버튼이 너무 많으면 산만하므로)."""
+    plan = active_plan(persona_id)
+    seen: set[str] = set()
+    out: list[tuple[str, dict]] = []
+    for tname, targs in plan:
+        if tname in used_tools:
+            continue  # 방금 한 행동은 다시 제안하지 않는다.
+        if tname in seen:
+            continue  # 같은 tool 중복 방지.
+        if tname not in ACTION_LABELS:
+            continue  # 버튼 문구가 없는 tool은 노출하지 않는다.
+        seen.add(tname)
+        out.append((tname, targs))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def render_actions(actions: list, reply_lang: str, msg_key: str):
+    """답변 아래에 '다음 행동' 선택지 버튼을 그린다. 능동성을 눈에 보이게 만드는 핵심 UI.
+
+    actions: next_actions가 만든 (tool_name, args) 리스트.
+    reply_lang: 버튼 라벨을 보여줄 언어(자동감지된 응답 언어).
+    msg_key: 버튼 위젯 key 충돌을 막는 접두어(메시지 식별자). 과거 메시지의 버튼과 안 겹치게 한다.
+
+    버튼이 눌리면 session_state['pending_action']에 (tool, args, lang)을 담고 rerun한다.
+    실제 tool 실행은 스크립트 상단의 pending_action 처리 블록이 맡는다."""
+    if not actions:
+        return
+    st.caption(NEXT_HEADER.get(reply_lang, NEXT_HEADER["ko"]))
+    cols = st.columns(len(actions))
+    for col, (tname, targs) in zip(cols, actions):
+        label = ACTION_LABELS.get(tname, {}).get(reply_lang) \
+            or ACTION_LABELS.get(tname, {}).get("ko") or tname
+        if col.button(label, key=f"act_{msg_key}_{tname}", use_container_width=True):
+            st.session_state["pending_action"] = {
+                "tool": tname, "args": dict(targs), "lang": reply_lang,
+            }
+            st.rerun()
+
+
 # 능동 모드
 if st.session_state.get("run_active"):
     st.subheader("능동 점검 결과")
@@ -217,11 +314,52 @@ st.subheader("대화")
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
+# 선택지 버튼이 눌린 경우를 먼저 처리한다(메시지 재생보다 앞).
+# 사용자가 '다음 행동' 버튼을 누르면 그 업무를 에이전트가 대신 처리한 것으로 본다.
+# LLM을 거치지 않고 해당 tool을 직접 실행해 결과 카드를 즉시 보여준다(대리 처리, 빠르고 안정적).
+# 처리 결과는 사용자가 누른 행동(user_action)과 에이전트 답변(assistant_display)으로 대화에 남긴다.
+pending = st.session_state.pop("pending_action", None)
+if pending:
+    tname = pending["tool"]
+    targs = pending["args"]
+    plang = pending["lang"]
+    # 사용자가 어떤 행동을 골랐는지 대화에 남긴다(누른 버튼 라벨).
+    action_label = ACTION_LABELS.get(tname, {}).get(plang) \
+        or ACTION_LABELS.get(tname, {}).get("ko") or tname
+    st.session_state["messages"].append({"role": "user_action", "text": action_label})
+    try:
+        out = run_tool(tname, targs)
+        st.session_state["messages"].append({
+            "role": "assistant_display",
+            "text": out.get("summary", ""),
+            "detail": out.get("detail", ""),
+            "card": out.get("card"),
+            "steps": [{"name": tname, "args": targs, "output": out}],
+            "lang": plang,
+            "used_tools": [tname],
+            "persona_id": persona_id,
+        })
+    except Exception as e:
+        st.session_state["messages"].append({
+            "role": "assistant_display",
+            "text": f"처리 중 오류가 발생했습니다: {e}",
+            "steps": [], "lang": plang, "used_tools": [], "persona_id": persona_id,
+        })
+
 # 지난 대화 재생. assistant 메시지는 처리 과정과 답변을 함께 복원한다.
-for m in st.session_state["messages"]:
+# 마지막 assistant 메시지에는 '다음 행동' 선택지 버튼을 함께 그린다.
+last_assistant_idx = max(
+    (i for i, m in enumerate(st.session_state["messages"]) if m["role"] == "assistant_display"),
+    default=-1,
+)
+for idx, m in enumerate(st.session_state["messages"]):
     if m["role"] == "user_display":
         with st.chat_message("user"):
             st.write(m["text"])
+    elif m["role"] == "user_action":
+        # 사용자가 선택지 버튼으로 고른 행동. 일반 질문과 구분되게 표시한다.
+        with st.chat_message("user"):
+            st.markdown(f"<span style='color:#E7B85C'>[선택]</span> {m['text']}", unsafe_allow_html=True)
     elif m["role"] == "assistant_display":
         with st.chat_message("assistant"):
             if m.get("steps"):
@@ -229,6 +367,16 @@ for m in st.session_state["messages"]:
                     for i, s in enumerate(m["steps"], 1):
                         render_step(i, s["name"], s["args"], s["output"])
             st.write(m["text"])
+            # 선택지로 처리된 결과 메시지면 카드도 복원한다.
+            if m.get("card"):
+                render_card(m["card"])
+            # 마지막 assistant 메시지에만 '다음 행동' 선택지 버튼을 붙인다.
+            if idx == last_assistant_idx:
+                used = set(m.get("used_tools", []))
+                pid = m.get("persona_id", persona_id)
+                mlang = m.get("lang", "ko")
+                acts = next_actions(pid, used)
+                render_actions(acts, mlang, msg_key=str(idx))
 
 prompt = st.chat_input("질문을 입력하세요")
 if prompt:
@@ -236,9 +384,13 @@ if prompt:
     with st.chat_message("user"):
         st.write(prompt)
 
+    # 응답 언어 확정. 사이드바가 '자동감지(auto)'면 질문 텍스트의 언어를 감지해 그 언어로 답한다.
+    # 사용자가 특정 언어를 골랐으면 그 언어로 강제한다(수동 오버라이드).
+    reply_lang = detect_lang(prompt) if lang == "auto" else lang
+
     # 답변 언어를 user 메시지에 직접 박는다. 시스템 프롬프트의 언어 지시만으로는
     # 사용자 입력 언어(예: 한국어 질문)가 모델을 더 강하게 끌어 무시되기 때문이다.
-    lang_directive = LANGUAGES[lang]["instruct"]
+    lang_directive = LANGUAGES[reply_lang]["instruct"]
     user_text = f"[페르소나: {persona_id}] [답변 언어 강제: {lang_directive}] {prompt}"
     steps = []  # 처리 과정 수집용
 
@@ -275,7 +427,7 @@ if prompt:
             try:
                 with st.spinner("에이전트가 처리 중..."):
                     for chunk in run_chat_stream(
-                        user_text, build_system_prompt(lang, persona_id), run_tool, on_step=on_step
+                        user_text, build_system_prompt(reply_lang, persona_id), run_tool, on_step=on_step
                     ):
                         if not chunk:
                             continue
@@ -294,12 +446,20 @@ if prompt:
         else:
             with st.spinner("에이전트가 처리 중..."):
                 try:
-                    text = run_chat(user_text, build_system_prompt(lang, persona_id), run_tool, on_step=on_step)
+                    text = run_chat(user_text, build_system_prompt(reply_lang, persona_id), run_tool, on_step=on_step)
                 except Exception as e:
                     text = f"오류: {e}"
             render_steps_panel()
             st.write(text)
 
+    # 이번 답변에서 실제로 실행된 tool 이름을 모은다. 다음 행동 선택지에서 이미 한 것을 빼는 데 쓴다.
+    used_tools = [s["name"] for s in steps if "name" in s]
     st.session_state["messages"].append(
-        {"role": "assistant_display", "text": text, "steps": steps}
+        {
+            "role": "assistant_display", "text": text, "steps": steps,
+            "lang": reply_lang, "used_tools": used_tools, "persona_id": persona_id,
+        }
     )
+    # 답변을 메시지로 확정한 뒤 한 번 더 그린다. 그래야 답변 바로 아래에
+    # '다음 행동' 선택지 버튼이 정상 위젯으로 렌더된다(스트리밍 중 인라인 버튼은 key 흐름이 꼬인다).
+    st.rerun()

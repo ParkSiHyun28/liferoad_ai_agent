@@ -10,6 +10,8 @@
 # 타입 힌트(str | None 등)를 문자열로 지연 평가해 낮은 파이썬 버전에서도 안 깨지게 한다.
 from __future__ import annotations
 
+import re
+
 # 지원 언어. 키는 코드 식별자, name은 사람이 읽을 라벨, instruct는 LLM에 주는 답변 언어 지시.
 LANGUAGES = {
     "ko": {"name": "한국어", "instruct": "반드시 한국어로만 답합니다."},
@@ -42,6 +44,47 @@ def default_lang_for_persona(persona_id: str) -> str:
         return "ko"
     lang = COUNTRY_LANG.get(p.get("country", ""), "ko")
     return lang if lang in LANGUAGES else "ko"
+
+
+# 문자 영역별 정규식. 언어 자동감지에 쓴다.
+# - 한글 음절(가-힣)은 한국어의 결정적 신호다.
+# - 데바나가리(네팔어 표기 문자)는 네팔어의 결정적 신호다.
+# - 베트남어는 라틴 문자지만 성조 부호가 붙은 고유 글자(ăâđêôơư…와 성조 결합)가 있다.
+_KO_RE = re.compile(r"[가-힣]")
+_DEVANAGARI_RE = re.compile(r"[ऀ-ॿ]")
+# 베트남어 전용 문자: đ와 성조 부호가 붙은 모음들(Latin Extended Additional 1EA0-1EFF 포함).
+_VI_RE = re.compile(
+    r"[đĐ]|[Ạ-ỿ]|[ăâêôơưĂÂÊÔƠƯ]"
+)
+# 라틴 알파벳(영어 판정용). 한글/데바나가리/베트남 성조가 전혀 없을 때만 본다.
+_LATIN_RE = re.compile(r"[a-zA-Z]")
+
+
+def detect_lang(text: str) -> str:
+    """사용자 입력 텍스트의 언어를 문자 영역으로 감지한다. LANGUAGES 코드 하나를 돌려준다.
+
+    판정 순서(결정적 신호 우선):
+    1. 한글 음절이 하나라도 있으면 ko.
+    2. 데바나가리 문자가 있으면 ne(네팔어).
+    3. 베트남어 전용 문자(성조 부호, đ)가 있으면 vi.
+    4. 한글/데바나가리/베트남 성조가 전혀 없고 라틴 알파벳만 있으면 en.
+    5. 어느 것도 못 잡으면 ko로 폴백(심사 기본 언어).
+
+    숫자나 기관명만 섞인 짧은 입력은 신호가 약하므로 ko로 폴백한다.
+    한국어 질문에 영어 단어(비자 코드 E-9 등)가 섞여도 한글이 있으면 ko로 본다."""
+    if not text:
+        return "ko"
+    if _KO_RE.search(text):
+        return "ko"
+    if _DEVANAGARI_RE.search(text):
+        return "ne"
+    if _VI_RE.search(text):
+        return "vi"
+    # 한글도 데바나가리도 베트남 성조도 없는데 라틴 알파벳이 있으면 영어로 본다.
+    if _LATIN_RE.search(text):
+        return "en"
+    return "ko"
+
 
 _BASE = """당신은 My LifeRoad입니다. 외국인의 한국 금융 생활을 입국부터 귀국까지 동행하는 라이프케어 AI 에이전트입니다.
 
