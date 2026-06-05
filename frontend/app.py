@@ -6,6 +6,7 @@
 from __future__ import annotations  # 타입 힌트를 문자열로 지연 평가(낮은 파이썬 버전 안전)
 
 import os
+import re
 import sys
 
 # repo 루트를 import 경로에 넣는다. `streamlit run frontend/app.py`만으로 동작하게 한다.
@@ -46,6 +47,39 @@ TOOL_LABELS = {
 }
 
 st.set_page_config(page_title="My LifeRoad 자산", layout="wide")
+
+
+# LLM이 답변 끝에 붙이는 후속 선택지 마커. 이 줄 이후를 버튼 라벨로 파싱한다.
+_NEXT_MARKER = "<<NEXT>>"
+
+
+def split_answer_and_actions(text: str) -> tuple[str, list[str]]:
+    """LLM 답변에서 본문과 후속 선택지 라벨을 분리한다.
+
+    LLM은 답변 끝에 `<<NEXT>>` 한 줄을 두고 그 아래 후속 행동을 한 줄씩 적도록 지시받는다.
+    이 함수는 마커 앞은 화면에 보일 본문으로, 마커 뒤 각 줄은 버튼 라벨로 가른다.
+    마커가 없으면(모델이 형식을 안 지킴) 본문 전체를 그대로 두고 빈 라벨 리스트를 돌려준다.
+    번호나 기호로 시작하는 줄은 기호를 떼어 정리한다. 너무 길거나 빈 줄은 버린다."""
+    if not text or _NEXT_MARKER not in text:
+        return text, []
+    body, _, tail = text.partition(_NEXT_MARKER)
+    labels: list[str] = []
+    for raw in tail.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        # "- ", "* ", "1. ", "1) " 같은 머리 기호를 떼어낸다.
+        line = re.sub(r"^[\-\*•]\s*", "", line)
+        line = re.sub(r"^\d+[\.\)]\s*", "", line)
+        line = line.strip().strip('"').strip("'").strip()
+        if not line or len(line) > 28:
+            continue  # 빈 줄과 비정상적으로 긴 줄(문장 누출)은 버튼으로 안 만든다.
+        if line.endswith((".", "다", "요")) and len(line) > 20:
+            continue  # 명령형 짧은 문구가 아니라 서술 문장이 새면 버튼으로 안 만든다.
+        labels.append(line)
+        if len(labels) >= 4:
+            break
+    return body.rstrip(), labels
 
 
 def run_tool(name: str, args: dict) -> dict:
@@ -274,145 +308,67 @@ START_HEADER = {
     "ne": "म यी कुराहरूमा मद्दत गर्न सक्छु। कहाँबाट सुरु गरौं?",
 }
 
-# 버튼이 눌렸을 때 LLM에 보낼 '사용자 의도' 자연어 문장.
-# 버튼을 그냥 tool 직접 실행으로 처리하지 않는다. 이 문장을 일반 질문과 똑같이 LLM에 보낸다.
-# 그러면 에이전트가 상황을 보고 어떤 tool을 쓸지 스스로 판단한다(진짜 능동성).
-# 답변 언어는 별도로 강제하므로 여기 문구의 언어는 LLM 판단용일 뿐 노출 언어와 무관하다.
-ACTION_INTENT = {
-    "deadline_radar": "다가오는 마감 기한이 있는지 확인하고 알려주세요.",
-    "pension_estimator": "제가 받을 수 있는 연금 반환일시금이 얼마인지 계산해 주세요.",
-    "collateral_calc": "제 예금으로 받을 수 있는 담보대출 한도를 계산해 주세요.",
-    "remit_optimizer": "본국 송금 비용을 줄일 수 있는 더 싼 경로를 찾아 주세요.",
-    "credit_builder": "한국에서 신용 점수를 쌓으려면 어떻게 해야 하는지 알려주세요.",
-    "compliance_reason": "제 비자로 일을 할 수 있는지 자격을 확인해 주세요.",
-    "form_autofill": "필요한 신청서를 제 정보로 자동 작성해 주세요.",
-    "perception_parse": "제 서류에 문제가 없는지 점검해 주세요.",
-}
+def start_action_labels(persona_id: str, reply_lang: str, limit: int = 3) -> list[str]:
+    """첫 화면 선제 선택지 라벨을 만든다(정적, 페르소나 기반).
 
-
-# 작업 흐름 후속 관계 그래프. 방금 한 작업 -> 자연스러운 다음 작업 후보(우선순위 순).
-# 단순히 '안 쓴 tool 아무거나'가 아니라 방금 한 일과 논리로 이어지는 다음 단계를 먼저 제안한다.
-# 예: 연금 반환일시금을 계산했으면 다음은 청구서 자동작성, 그 다음은 받은 돈 송금 경로.
-# 우리 서비스 3원리 중 '대리처리'를 살려 대부분 흐름이 form_autofill(서류 대행)로 수렴한다.
-FOLLOWUP = {
-    "pension_estimator": ["form_autofill", "deadline_radar", "remit_optimizer"],
-    "deadline_radar": ["form_autofill", "perception_parse", "pension_estimator"],
-    "collateral_calc": ["credit_builder", "form_autofill", "remit_optimizer"],
-    "credit_builder": ["collateral_calc", "form_autofill", "deadline_radar"],
-    "compliance_reason": ["form_autofill", "perception_parse", "deadline_radar"],
-    "perception_parse": ["form_autofill", "deadline_radar", "compliance_reason"],
-    "remit_optimizer": ["pension_estimator", "form_autofill", "deadline_radar"],
-    "form_autofill": ["deadline_radar", "perception_parse", "remit_optimizer"],
-}
-
-
-def next_actions(persona_id: str, used_tools: set[str], limit: int = 3,
-                 last_tool: str | None = None) -> list[tuple[str, dict]]:
-    """이 페르소나에게 의미 있는 '다음 행동' 후보를 만든다(작업 흐름 기반).
-
-    핵심은 방금 한 작업(last_tool)의 자연스러운 후속을 먼저 제안하는 것이다.
-    FOLLOWUP 그래프로 방금 일과 논리로 이어지는 다음 단계를 우선 배치한 뒤,
-    부족분을 페르소나 속성 계획(active_plan)으로 채운다.
-
-    필터:
-    - 이미 실행한 tool(used_tools)은 다시 제안하지 않는다(같은 보기 반복 방지).
-    - 그 페르소나에게 의미 있는 tool만(active_plan에 든 것). 엉뚱한 후속을 막는다.
-    - ACTION_LABELS에 문구가 있는 tool만 버튼으로 노출한다.
-    last_tool이 없으면(첫 화면) 페르소나 계획 순서대로만 채운다."""
+    첫 화면에는 아직 LLM 답변이 없어 LLM이 후속을 만들 수 없다. 그래서 여기서만
+    페르소나 속성(active_plan)으로 의미 있는 행동을 골라 정적 라벨로 보여준다.
+    버튼을 누르면 그 라벨 문구가 LLM에 전달되고, 이후 모든 후속 선택지는
+    LLM이 답변과 함께 직접 생성한다(split_answer_and_actions로 파싱)."""
     plan = active_plan(persona_id)
-    # 이 페르소나에게 의미 있는 tool 집합과 기본 args. FOLLOWUP 후보를 이 안으로만 좁힌다.
-    plan_tools = {tname: targs for tname, targs in plan}
-
-    def usable(tname: str) -> bool:
-        return (tname not in used_tools
-                and tname in ACTION_LABELS
-                and tname in plan_tools)
-
+    out: list[str] = []
     seen: set[str] = set()
-    out: list[tuple[str, dict]] = []
-
-    def push(tname: str):
-        if tname in seen or not usable(tname):
-            return
-        seen.add(tname)
-        out.append((tname, plan_tools[tname]))
-
-    # 1순위: 방금 한 작업의 후속(FOLLOWUP). 다음 단계와 관련된 버튼을 먼저 보여준다.
-    if last_tool:
-        for nxt in FOLLOWUP.get(last_tool, []):
-            push(nxt)
-            if len(out) >= limit:
-                return out
-    # 2순위: 페르소나 일반 계획으로 부족분을 채운다.
     for tname, _ in plan:
-        push(tname)
+        if tname in seen or tname not in ACTION_LABELS:
+            continue
+        seen.add(tname)
+        label = ACTION_LABELS.get(tname, {}).get(reply_lang) \
+            or ACTION_LABELS.get(tname, {}).get("ko") or tname
+        out.append(label)
         if len(out) >= limit:
             break
     return out
 
 
-def render_actions(actions: list, reply_lang: str, msg_key: str, header: bool = True):
+def render_actions(labels: list[str], reply_lang: str, msg_key: str, header: bool = True):
     """답변 아래에 '다음 행동' 선택지 버튼을 그린다. 능동성을 눈에 보이게 만드는 핵심 UI.
 
-    actions: next_actions가 만든 (tool_name, args) 리스트.
-    reply_lang: 버튼 라벨을 보여줄 언어(자동감지된 응답 언어).
-    msg_key: 버튼 위젯 key 충돌을 막는 접두어(메시지 식별자). 과거 메시지의 버튼과 안 겹치게 한다.
+    labels: 버튼에 그대로 들어갈 문구 리스트.
+            대화 진행 중에는 LLM이 답변과 함께 생성한 후속 행동이다(답변과 일치 보장).
+            첫 화면에서는 페르소나 기반 정적 문구다(아직 LLM 답변이 없으므로).
+    reply_lang: 헤더 caption 언어.
+    msg_key: 버튼 위젯 key 충돌 방지용 접두어.
     header: NEXT_HEADER caption을 직접 그릴지. 첫 화면은 호출부가 START_HEADER를 따로 그리므로 False.
 
-    버튼이 눌리면 session_state['pending_intent']에 의도 문장을 담고 rerun한다.
-    실제 처리는 스크립트 상단의 pending_intent 처리 블록(run_agent_turn)이 맡는다."""
-    if not actions:
+    버튼이 눌리면 그 문구 자체를 사용자 의도로 session_state['pending_intent']에 담고 rerun한다.
+    문구를 그대로 LLM에 보내므로 에이전트가 그 요청을 보고 tool을 스스로 골라 처리한다."""
+    if not labels:
         return
     if header:
         st.caption(NEXT_HEADER.get(reply_lang, NEXT_HEADER["ko"]))
-    cols = st.columns(len(actions))
-    for col, (tname, targs) in zip(cols, actions):
-        label = ACTION_LABELS.get(tname, {}).get(reply_lang) \
-            or ACTION_LABELS.get(tname, {}).get("ko") or tname
-        if col.button(label, key=f"act_{msg_key}_{tname}", use_container_width=True):
-            # 버튼은 tool을 직접 실행하지 않는다. 그 의도를 자연어 질문으로 바꿔
-            # 일반 질문과 똑같이 LLM에 보낸다. 에이전트가 상황을 보고 tool을 스스로 고른다.
+    cols = st.columns(len(labels))
+    for i, (col, label) in enumerate(zip(cols, labels)):
+        if col.button(label, key=f"act_{msg_key}_{i}", use_container_width=True):
+            # 버튼 문구를 그대로 LLM에 보낸다. 에이전트가 상황을 보고 tool을 스스로 고른다.
             st.session_state["pending_intent"] = {
-                "intent": ACTION_INTENT.get(tname, label),
-                "label": label,  # 대화에 남길 '사용자가 고른 행동' 표시용
+                "intent": label,
+                "label": label,  # 대화에 남길 '사용자가 고른 행동' 표시
                 "lang": reply_lang,
             }
             st.rerun()
-
-
-def used_tools_so_far() -> set[str]:
-    """이번 대화에서 지금까지 실제로 실행된 모든 tool 이름의 합집합.
-    마지막 메시지 한 개가 아니라 전체 이력을 본다. 같은 선택지가 계속 뜨던 버그의 핵심 수정.
-    페르소나가 바뀌면 history_reset이 messages를 비우므로 자연히 새 사람 기준으로 초기화된다."""
-    used: set[str] = set()
-    for m in st.session_state.get("messages", []):
-        if m.get("role") == "assistant_display":
-            used.update(m.get("used_tools", []))
-    return used
-
-
-def last_used_tool() -> str | None:
-    """가장 최근 assistant 답변에서 마지막으로 실행한 tool 이름.
-    다음 행동 선택지에서 '방금 한 작업의 후속'을 우선 배치하는 기준으로 쓴다.
-    LLM이 한 답변에서 여러 tool을 쓰면 마지막 것을 핵심 작업으로 본다."""
-    for m in reversed(st.session_state.get("messages", [])):
-        if m.get("role") == "assistant_display":
-            ut = m.get("used_tools", [])
-            return ut[-1] if ut else None
-    return None
 
 
 def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_action: bool):
     """사용자 발화 1건을 에이전트에 보내고 답변과 처리 과정을 messages에 남긴다.
     일반 질문과 선택지 버튼이 같은 경로를 쓰게 하는 공통 함수.
 
-    user_intent: LLM에 보낼 실제 의도 문장(버튼이면 ACTION_INTENT, 질문이면 입력 원문).
+    user_intent: LLM에 보낼 실제 의도 문장(버튼이면 버튼 라벨 문구, 질문이면 입력 원문).
     reply_lang: 답변 언어 코드.
     display_user: 대화에 남길 사용자 측 표시 텍스트(버튼이면 버튼 라벨, 질문이면 입력 원문).
     is_action: 버튼에서 왔으면 True. 대화에 '[선택]' 칩으로 구분 표시한다.
 
-    LLM이 상황을 보고 tool을 스스로 골라 실행한다(진짜 능동성). 실제 실행된 tool을
-    used_tools로 정확히 기록해 다음 선택지에서 중복 제거가 올바르게 된다."""
+    LLM이 상황을 보고 tool을 스스로 골라 실행하고, 답변 끝에 다음 행동 선택지까지 직접 만든다.
+    그래서 답변에서 던진 제안과 화면 버튼이 항상 일치한다."""
     role = "user_action" if is_action else "user_display"
     st.session_state["messages"].append({"role": role, "text": display_user})
 
@@ -448,9 +404,13 @@ def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_acti
             text = f"오류: {e}"
 
     used = [s["name"] for s in steps if "name" in s]
+    # LLM이 답변 끝에 붙인 후속 선택지(<<NEXT>>)를 본문과 분리한다.
+    # 본문만 화면에 보이고, 라벨은 다음 행동 버튼이 된다(답변과 일치 보장).
+    body, next_labels = split_answer_and_actions(text)
     st.session_state["messages"].append({
-        "role": "assistant_display", "text": text, "steps": steps,
+        "role": "assistant_display", "text": body, "steps": steps,
         "lang": reply_lang, "used_tools": used, "persona_id": persona_id,
+        "next_labels": next_labels,
     })
 
 
@@ -516,15 +476,10 @@ for idx, m in enumerate(st.session_state["messages"]):
             if m.get("card"):
                 render_card(m["card"])
             # 마지막 assistant 메시지에만 '다음 행동' 선택지 버튼을 붙인다.
-            # used는 이번 대화 전체에서 쓴 tool의 합집합이다(마지막 한 개가 아니라).
-            # 같은 보기가 계속 뜨던 버그를 여기서 막는다.
+            # 선택지는 LLM이 답변과 함께 생성한 것이다(답변에서 던진 제안과 버튼이 일치).
             if idx == last_assistant_idx:
-                used = used_tools_so_far()
-                pid = m.get("persona_id", persona_id)
                 mlang = m.get("lang", "ko")
-                # last_tool로 방금 한 작업의 후속을 우선 제안한다(작업 흐름 연결).
-                acts = next_actions(pid, used, last_tool=last_used_tool())
-                render_actions(acts, mlang, msg_key=str(idx))
+                render_actions(m.get("next_labels", []), mlang, msg_key=str(idx))
 
 # 첫 화면 선제 선택지. 대화가 아직 비어 있을 때만 띄운다.
 # 페르소나를 인식한 요약 카드와 그 사람 상황에 맞는 행동 버튼을 먼저 보여준다.
@@ -537,8 +492,8 @@ if not st.session_state["messages"]:
     start_lang = "ko" if lang == "auto" else lang
     render_persona_card(PERS[persona_id])
     st.caption(START_HEADER.get(start_lang, START_HEADER["ko"]))
-    acts = next_actions(persona_id, set())  # 아직 쓴 tool 없음
-    render_actions(acts, start_lang, msg_key="start", header=False)
+    labels = start_action_labels(persona_id, start_lang)  # 첫 화면 정적 라벨
+    render_actions(labels, start_lang, msg_key="start", header=False)
 
 prompt = st.chat_input("질문을 입력하세요")
 if prompt:
@@ -597,11 +552,12 @@ if prompt:
                             render_steps_panel()  # 첫 토큰 시점엔 tool 단계가 끝나 있다.
                             steps_shown = True
                         text += chunk
-                        answer_box.markdown(strip_emoji(text))
+                        # 스트리밍 중에는 <<NEXT>> 마커 이후(선택지 원문)를 숨기고 본문만 흘린다.
+                        answer_box.markdown(split_answer_and_actions(strip_emoji(text))[0])
                 if not steps_shown:
                     render_steps_panel()
                 text = strip_emoji(text)
-                answer_box.markdown(text)
+                answer_box.markdown(split_answer_and_actions(text)[0])
             except Exception as e:
                 text = f"오류: {e}"
                 answer_box.markdown(text)
@@ -612,14 +568,17 @@ if prompt:
                 except Exception as e:
                     text = f"오류: {e}"
             render_steps_panel()
-            st.write(text)
+            st.write(split_answer_and_actions(text)[0])
 
-    # 이번 답변에서 실제로 실행된 tool 이름을 모은다. 다음 행동 선택지에서 이미 한 것을 빼는 데 쓴다.
+    # 이번 답변에서 실제로 실행된 tool 이름을 모은다.
     used_tools = [s["name"] for s in steps if "name" in s]
+    # LLM이 답변 끝에 붙인 후속 선택지(<<NEXT>>)를 본문과 분리해 저장한다.
+    body, next_labels = split_answer_and_actions(text)
     st.session_state["messages"].append(
         {
-            "role": "assistant_display", "text": text, "steps": steps,
+            "role": "assistant_display", "text": body, "steps": steps,
             "lang": reply_lang, "used_tools": used_tools, "persona_id": persona_id,
+            "next_labels": next_labels,
         }
     )
     # 답변을 메시지로 확정한 뒤 한 번 더 그린다. 그래야 답변 바로 아래에
