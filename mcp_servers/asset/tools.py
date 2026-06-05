@@ -39,7 +39,7 @@ def collateral_calc(persona_id: str) -> dict:
         ),
         "numbers": numbers,
         "card": {
-            "icon": "🔐",
+            "icon": "",
             "head": f"잔고 {_won(deposit)} 유지하며 {_won(limit)} 활용 가능",
             "body": f"예금담보대출(한도 {int(data.COLLATERAL_LOAN_RATIO*100)}%)로 생활비 마련 가능. 잔고 요건 위반 없이 안전하게 쓸 수 있습니다.",
             "metric": f"담보대출 한도 {_won(limit)}",
@@ -72,7 +72,7 @@ def pension_estimator(persona_id: str) -> dict:
             ),
             "numbers": numbers,
             "card": {
-                "icon": "🏛️",
+                "icon": "",
                 "head": f"귀국 시 반환일시금 약 {_won(refund)} 수령 가능",
                 "body": f"납부 {months}개월치. 출국 후 청구하면 받습니다. 신청서 작성을 도와드립니다.",
                 "metric": f"예상 수령 {_won(refund)}",
@@ -89,7 +89,7 @@ def pension_estimator(persona_id: str) -> dict:
         ),
         "numbers": numbers,
         "card": {
-            "icon": "⚖️",
+            "icon": "",
             "head": "귀국하면 연금 돌려받기 어렵습니다",
             "body": f"{p['country']}-한국 협정 미체결. 단 E-7 취업전환 시 납부 이력이 수령으로 이어집니다. 취업비자 전환 도움 필요하면 알려주세요.",
             "metric": f"취업전환 가능성 {int(data.STUDENT_VISA_CONVERT_RATE*100)}.4%",
@@ -130,7 +130,7 @@ def remit_optimizer(persona_id: str) -> dict:
         ),
         "numbers": numbers,
         "card": {
-            "icon": "💸",
+            "icon": "",
             "head": "송금 비용 절반으로 줄일 수 있습니다",
             "body": f"현재 경로({default['fee_rate']*100:.2f}%) 대신 {best['name']}({best['fee_rate']*100:.1f}%)를 쓰면 매달 {_won(saving)} 아낍니다. 연간 약 {_won(saving*12)} 절감.",
             "metric": f"경로 {len(data.REMIT_ROUTES)}개 비교 완료",
@@ -171,7 +171,7 @@ def credit_builder(persona_id: str, months_accrued: int = 0) -> dict:
             f"현재 {months_accrued}개월 축적. {data.CREDIT_PROFILE_MIN_MONTHS}개월 이상이면 JB 외국인 전용 신용평가에 활용할 수 있습니다."
         ),
         "numbers": numbers,
-        "card": {"icon": "📈", "head": head, "body": body, "metric": metric},
+        "card": {"icon": "", "head": head, "body": body, "metric": metric},
     }
 
 
@@ -223,7 +223,7 @@ def deadline_radar(persona_id: str, as_of: str) -> dict:
         ),
         "numbers": numbers,
         "card": {
-            "icon": "🏦",
+            "icon": "",
             "head": f"출국만기보험 약 {_won(insurance_total)} 적립 중",
             "body": "출국 후 3년 내 청구 필수. 지금 수령 절차를 미리 확인하세요.",
             "metric": f"출국까지 D-{days_to_exit}",

@@ -5,3 +5,7 @@ __pycache__/
 .streamlit/secrets.toml
 .DS_Store
 .understand-anything/
+
+# 임시 측정 스크립트 (공급자/모델 벤치마크용, 산출물 아님)
+bench_models.py
+bench_providers.py
