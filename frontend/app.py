@@ -20,8 +20,12 @@ from shared.secrets_bridge import bridge_secrets
 
 bridge_secrets()
 
-from shared.system_prompt import build_system_prompt, LANGUAGES, PERSONA_DEFAULT_LANG
-from shared.personas import PERSONAS
+import random
+
+from shared.system_prompt import build_system_prompt, LANGUAGES, default_lang_for_persona
+from shared.personas import (
+    PERSONAS, get_persona, all_personas, make_random_personas, register_personas,
+)
 from shared.registry import TOOL_REGISTRY, ACTIVE_TOOLS
 from frontend.llm_provider import run_chat, run_chat_stream, strip_emoji, provider_label, PROVIDER
 
@@ -100,26 +104,46 @@ def render_step(idx: int, name: str, args: dict, output: dict):
         )
 
 
+# 부팅 시 한 번만 동적 페르소나를 만들어 등록한다. seed 고정이라 재실행해도 같은 50명.
+# session_state 가드로 rerun마다 새로 만들지 않게 한다.
+if "personas_loaded" not in st.session_state:
+    register_personas(make_random_personas(60, seed=42))
+    st.session_state["personas_loaded"] = True
+
+# 고정 2명과 동적 페르소나를 합친 전체. 사이드바와 시연이 이 목록을 쓴다.
+PERS = all_personas()
+
 # 사이드바
 st.sidebar.title("My LifeRoad 자산")
-persona_id = st.sidebar.radio(
+st.sidebar.caption("시연용 페르소나를 골라 그 사람 기준으로 에이전트가 어떻게 동작하는지 봅니다.")
+
+# 비자 필터로 후보를 좁힌다. 50~100명이라 라디오 대신 드롭다운을 쓴다.
+visa_opts = ["전체"] + sorted({p["visa"] for p in PERS.values()})
+vf = st.sidebar.selectbox("비자 필터", visa_opts)
+ids = sorted(k for k, p in PERS.items() if vf == "전체" or p["visa"] == vf)
+
+# 랜덤 페르소나 버튼. 다양한 사람을 빠르게 시연하려고 후보 중 하나를 무작위 선택한다.
+if st.sidebar.button("랜덤 페르소나"):
+    st.session_state["_rand_pid"] = random.choice(ids)
+    st.rerun()
+
+# 랜덤으로 뽑힌 id가 현재 필터 후보에 있으면 기본 선택으로 쓴다.
+rand_pid = st.session_state.get("_rand_pid")
+default_idx = ids.index(rand_pid) if rand_pid in ids else 0
+persona_id = st.sidebar.selectbox(
     "페르소나",
-    options=list(PERSONAS.keys()),
-    format_func=lambda k: f"[{PERSONAS[k]['flag']}] {PERSONAS[k]['name']} ({PERSONAS[k]['visa']})",
+    options=ids,
+    index=default_idx,
+    format_func=lambda k: f"[{PERS[k]['flag']}] {PERS[k]['name']} ({PERS[k]['visa']} {PERS[k]['role']})",
 )
 
-# 답변 언어. 페르소나 모국어를 기본으로 둔다. 페르소나를 바꾸면 그 모국어로 기본값을 갱신한다.
-# 단 사용자가 직접 고른 언어는 그 세션 동안 존중한다.
-default_lang = PERSONA_DEFAULT_LANG.get(persona_id, "ko")
-if st.session_state.get("_lang_persona") != persona_id:
-    # 페르소나가 바뀌면 그 모국어로 언어를 초기화한다.
-    st.session_state["lang"] = default_lang
-    st.session_state["_lang_persona"] = persona_id
+# 답변 언어. 기본은 한국어로 고정한다(심사위원과 팀이 바로 읽게).
+# 외국인 모국어로 보려면 사용자가 드롭다운에서 직접 고른다.
 lang_codes = list(LANGUAGES.keys())
 lang = st.sidebar.selectbox(
     "답변 언어",
     options=lang_codes,
-    index=lang_codes.index(st.session_state.get("lang", default_lang)),
+    index=lang_codes.index(st.session_state.get("lang", "ko")),
     format_func=lambda c: LANGUAGES[c]["name"],
 )
 st.session_state["lang"] = lang
@@ -135,28 +159,43 @@ if st.sidebar.button("능동 점검 실행"):
     st.session_state["run_active"] = True
 
 def active_plan(persona_id: str) -> list[tuple[str, dict]]:
-    """페르소나별 능동 점검 계획을 반환한다. 각 항목은 (tool_name, args_dict) 튜플이다.
-    minh: 보험/송금/서류 위주. suman: 담보대출/신용/비자/서류 위주."""
-    if persona_id == "minh":
-        return [
-            ("deadline_radar", {"persona_id": persona_id}),
-            ("remit_optimizer", {"persona_id": persona_id}),
-            ("form_autofill", {"form_id": "departure_insurance_claim", "persona_id": persona_id}),
-            ("perception_parse", {"persona_id": persona_id}),
-        ]
-    # suman(기본 및 기타 페르소나)
-    return [
-        ("collateral_calc", {"persona_id": persona_id}),
-        ("credit_builder", {"months_accrued": 8, "persona_id": persona_id}),
-        ("compliance_reason", {"check_type": "visa_work_eligibility", "persona_id": persona_id}),
-        ("form_autofill", {"form_id": "alien_registration_renewal", "persona_id": persona_id}),
-    ]
+    """페르소나 속성으로 능동 점검 계획을 만든다. persona_id 하드코딩 없이
+    visa wage deposit pension 값으로 어떤 tool이 의미 있는지 판단한다.
+    어떤 페르소나든 form_autofill과 perception_parse가 무조건 들어가 최소 2개를 보장한다.
+    각 항목은 (tool_name, args_dict) 튜플이다."""
+    p = get_persona(persona_id)
+    plan: list[tuple[str, dict]] = []
+
+    # E-9 근로자만 출국만기보험과 마감 추적 대상
+    if p["visa"] == "E-9":
+        plan.append(("deadline_radar", {"persona_id": persona_id}))
+    # 정기 송금이 있으면 경로 최적화
+    if p["monthly_remit_krw"] > 0:
+        plan.append(("remit_optimizer", {"persona_id": persona_id}))
+    # 협정 미체결이고 납부이력이 있으면 반환일시금 산출
+    if (not p["social_security_treaty"]) and p["pension_months"] > 0:
+        plan.append(("pension_estimator", {"persona_id": persona_id}))
+    # 잔고증명 예치금이 있으면 예금담보대출 한도
+    if p["deposit_balance_krw"] > 0:
+        plan.append(("collateral_calc", {"persona_id": persona_id}))
+    # 소득 없고 예치금만 있는 Thin Filer형이면 대안신용 축적
+    if p["monthly_wage_krw"] == 0 and p["deposit_balance_krw"] > 0:
+        plan.append(("credit_builder", {"months_accrued": 8, "persona_id": persona_id}))
+    # E-9 D-2만 비자 취업 가드레일이 의미 있는 분기를 가짐
+    if p["visa"] in ("E-9", "D-2"):
+        plan.append(("compliance_reason", {"check_type": "visa_work_eligibility", "persona_id": persona_id}))
+    # 신청서 자동작성. E-9는 출국만기보험 청구서, 그 외는 외국인등록증 갱신
+    form_id = "departure_insurance_claim" if p["visa"] == "E-9" else "alien_registration_renewal"
+    plan.append(("form_autofill", {"form_id": form_id, "persona_id": persona_id}))
+    # 서류 파싱은 항상 최소 1개 점검 보장
+    plan.append(("perception_parse", {"persona_id": persona_id}))
+    return plan
 
 
 # 능동 모드
 if st.session_state.get("run_active"):
     st.subheader("능동 점검 결과")
-    st.caption(f"{PERSONAS[persona_id]['name']}님 기준일 {TODAY}")
+    st.caption(f"{PERS[persona_id]['name']}님 기준일 {TODAY}")
     plan = active_plan(persona_id)
     # 한 tool이 실패해도 나머지는 계속 표시한다.
     for tname, targs in plan:
@@ -189,7 +228,7 @@ for m in st.session_state["messages"]:
                         render_step(i, s["name"], s["args"], s["output"])
             st.write(m["text"])
 
-prompt = st.chat_input("질문을 입력하세요. 예: 민 씨 연금 얼마 받아요?")
+prompt = st.chat_input("질문을 입력하세요")
 if prompt:
     st.session_state["messages"].append({"role": "user_display", "text": prompt})
     with st.chat_message("user"):
@@ -234,7 +273,7 @@ if prompt:
             try:
                 with st.spinner("에이전트가 처리 중..."):
                     for chunk in run_chat_stream(
-                        user_text, build_system_prompt(lang), run_tool, on_step=on_step
+                        user_text, build_system_prompt(lang, persona_id), run_tool, on_step=on_step
                     ):
                         if not chunk:
                             continue
@@ -253,7 +292,7 @@ if prompt:
         else:
             with st.spinner("에이전트가 처리 중..."):
                 try:
-                    text = run_chat(user_text, build_system_prompt(lang), run_tool, on_step=on_step)
+                    text = run_chat(user_text, build_system_prompt(lang, persona_id), run_tool, on_step=on_step)
                 except Exception as e:
                     text = f"오류: {e}"
             render_steps_panel()

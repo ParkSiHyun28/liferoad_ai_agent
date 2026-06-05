@@ -189,12 +189,15 @@ def deadline_radar(persona_id: str, as_of: str) -> dict:
     exit_y, exit_m = map(int, p["exit_plan"].split("-"))
     exit_date = date(exit_y, exit_m, 1)
     days_to_exit = (exit_date - today).days
+    # 출국 예정일이 지난 페르소나는 음수 D-day가 나온다. 표시용 라벨로 음수 노출을 막는다.
+    # 동적 생성기는 항상 미래 출국을 보장하지만 임의 페르소나 대비 방어한다.
+    dday_label = f"D-{days_to_exit}" if days_to_exit >= 0 else "출국 예정일 경과"
     # E-9 근로자만 출국만기보험 대상 (월 통상임금 8.3% 적립)
     has_insurance = p["visa"] == "E-9"
     insurance_total = 0
     if has_insurance:
-        months = _months_to_severance(p, today)
-        insurance_total = int(p["monthly_wage_krw"] * data.SEVERANCE_INSURANCE_RATE * months)
+        months = max(0, _months_to_severance(p, today))
+        insurance_total = max(0, int(p["monthly_wage_krw"] * data.SEVERANCE_INSURANCE_RATE * months))
     numbers = {
         "as_of": as_of,
         "exit_plan": p["exit_plan"],
@@ -205,19 +208,19 @@ def deadline_radar(persona_id: str, as_of: str) -> dict:
     }
     if not has_insurance:
         return {
-            "summary": f"{p['name']}님은 출국만기보험 대상이 아닙니다. 출국까지 D-{days_to_exit}.",
+            "summary": f"{p['name']}님은 출국만기보험 대상이 아닙니다. 출국까지 {dday_label}.",
             "detail": (
                 f"출국만기보험은 E-9 사업장 근로자 의무 가입 대상입니다. "
-                f"{p['visa']} 비자는 해당하지 않습니다. 출국 예정일은 {p['exit_plan']}이고 현재 D-{days_to_exit}입니다."
+                f"{p['visa']} 비자는 해당하지 않습니다. 출국 예정일은 {p['exit_plan']}이고 현재 {dday_label}입니다."
             ),
             "numbers": numbers,
             "card": None,
         }
     return {
-        "summary": f"출국만기보험 약 {_won(insurance_total)} 적립 중. 출국까지 D-{days_to_exit}, 청구 마감 소멸시효 {data.CLAIM_DEADLINE_YEARS}년.",
+        "summary": f"출국만기보험 약 {_won(insurance_total)} 적립 중. 출국까지 {dday_label}, 청구 마감 소멸시효 {data.CLAIM_DEADLINE_YEARS}년.",
         "detail": (
             f"E-9 사업장은 출국만기보험 의무 가입 대상입니다. 월 통상임금의 {data.SEVERANCE_INSURANCE_RATE*100:.1f}%가 적립됩니다. "
-            f"현재까지 약 {_won(insurance_total)} 적립 추정. 출국 예정일 {p['exit_plan']} 기준 D-{days_to_exit}입니다. "
+            f"현재까지 약 {_won(insurance_total)} 적립 추정. 출국 예정일 {p['exit_plan']} 기준 {dday_label}입니다. "
             f"소멸시효는 출국일로부터 {data.CLAIM_DEADLINE_YEARS}년이지만 청구를 모르면 소멸 위험이 있습니다. "
             f"참고로 미청구 휴면보험금은 {data.UNCLAIMED_INSURANCE_KRW/1e8:,.1f}억 원 규모이고 반환율은 {data.UNCLAIMED_RETURN_RATE*100:.0f}%에 그칩니다."
         ),
@@ -226,7 +229,7 @@ def deadline_radar(persona_id: str, as_of: str) -> dict:
             "icon": "",
             "head": f"출국만기보험 약 {_won(insurance_total)} 적립 중",
             "body": f"출국 후 {data.CLAIM_DEADLINE_YEARS}년 내 청구 필수. 지금 수령 절차를 미리 확인하세요.",
-            "metric": f"출국까지 D-{days_to_exit}",
+            "metric": f"출국까지 {dday_label}",
         },
     }
 

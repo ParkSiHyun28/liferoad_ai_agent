@@ -4,8 +4,14 @@ Anthropic SDK tool 형식(name, description, input_schema)을 따른다."""
 _PERSONA_PROP = {
     "persona_id": {
         "type": "string",
-        "enum": ["minh", "suman"],
-        "description": "페르소나 식별자. minh=응웬 반 민(베트남 E-9), suman=수만 라이(네팔 D-2).",
+        # enum을 두지 않는다. 동적 페르소나 50~100명을 enum에 싣지 않으려는 의도다.
+        # 올바른 id는 시스템 프롬프트의 현재 사용자 블록과 user 메시지의 '[페르소나: <id>]'
+        # 태그가 강하게 유도한다. 잘못된 id는 get_persona가 ValueError를 던지고
+        # llm_provider가 그 예외를 잡아 안전한 오류 dict로 바꾸므로 앱이 죽지 않는다.
+        "description": (
+            "페르소나 식별자. 시스템 프롬프트의 현재 사용자 블록과 사용자 메시지의 "
+            "'[페르소나: <id>]' 태그에 적힌 id를 그대로 사용한다. 예 minh suman e9_vn_001."
+        ),
     }
 }
 
