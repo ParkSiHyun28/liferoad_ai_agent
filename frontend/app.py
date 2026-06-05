@@ -195,7 +195,10 @@ if prompt:
     with st.chat_message("user"):
         st.write(prompt)
 
-    user_text = f"[페르소나: {persona_id}] {prompt}"
+    # 답변 언어를 user 메시지에 직접 박는다. 시스템 프롬프트의 언어 지시만으로는
+    # 사용자 입력 언어(예: 한국어 질문)가 모델을 더 강하게 끌어 무시되기 때문이다.
+    lang_directive = LANGUAGES[lang]["instruct"]
+    user_text = f"[페르소나: {persona_id}] [답변 언어 강제: {lang_directive}] {prompt}"
     steps = []  # 처리 과정 수집용
 
     def on_step(kind, payload):
