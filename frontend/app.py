@@ -20,10 +20,10 @@ from shared.secrets_bridge import bridge_secrets
 
 bridge_secrets()
 
-from shared.system_prompt import build_system_prompt
+from shared.system_prompt import build_system_prompt, LANGUAGES, PERSONA_DEFAULT_LANG
 from shared.personas import PERSONAS
 from shared.registry import TOOL_REGISTRY, ACTIVE_TOOLS
-from frontend.llm_provider import run_chat, provider_label, PROVIDER
+from frontend.llm_provider import run_chat, run_chat_stream, strip_emoji, provider_label, PROVIDER
 
 TODAY = "2026-10-03"  # 데모 기준일. 민 출국 D-90 무렵.
 
@@ -107,6 +107,23 @@ persona_id = st.sidebar.radio(
     options=list(PERSONAS.keys()),
     format_func=lambda k: f"[{PERSONAS[k]['flag']}] {PERSONAS[k]['name']} ({PERSONAS[k]['visa']})",
 )
+
+# 답변 언어. 페르소나 모국어를 기본으로 둔다. 페르소나를 바꾸면 그 모국어로 기본값을 갱신한다.
+# 단 사용자가 직접 고른 언어는 그 세션 동안 존중한다.
+default_lang = PERSONA_DEFAULT_LANG.get(persona_id, "ko")
+if st.session_state.get("_lang_persona") != persona_id:
+    # 페르소나가 바뀌면 그 모국어로 언어를 초기화한다.
+    st.session_state["lang"] = default_lang
+    st.session_state["_lang_persona"] = persona_id
+lang_codes = list(LANGUAGES.keys())
+lang = st.sidebar.selectbox(
+    "답변 언어",
+    options=lang_codes,
+    index=lang_codes.index(st.session_state.get("lang", default_lang)),
+    format_func=lambda c: LANGUAGES[c]["name"],
+)
+st.session_state["lang"] = lang
+
 st.sidebar.caption(f"모델: {provider_label()}")
 if PROVIDER == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
     key_in = st.sidebar.text_input("ANTHROPIC_API_KEY", type="password")
@@ -194,23 +211,50 @@ if prompt:
 
     with st.chat_message("assistant"):
         proc_box = st.container()  # 처리 과정을 답변 위에 둔다
-        # 기본 공급자 gemini는 OpenAI 호환 엔드포인트가 토큰 스트리밍을 사실상 지원하지 않는다.
-        # 실측상 스트리밍이 응답을 한꺼번에 보내 오히려 느렸다(6.9초 대 비스트리밍 3.6초).
-        # 그래서 시연 경로는 빠른 비스트리밍 run_chat을 쓴다.
-        # 토큰 스트리밍이 필요한 본선 Claude 전환 시엔 run_chat_stream을 쓰면 된다.
-        with st.spinner("에이전트가 처리 중..."):
+
+        def render_steps_panel():
+            """tool 단계가 끝난 뒤 처리 과정을 답변 위에 그린다."""
+            with proc_box:
+                if steps:
+                    st.markdown("**처리 과정**")
+                    for i, s in enumerate(steps, 1):
+                        render_step(i, s["name"], s["args"], s["output"])
+                    st.markdown("**답변**")
+
+        # Claude는 진짜 토큰 스트리밍을 지원해 글자가 흐른다(체감 속도 개선).
+        # gemini의 OpenAI 호환 엔드포인트는 토큰 스트리밍을 사실상 안 해(응답을 한꺼번에 보냄)
+        # 오히려 느리다. 그래서 Claude만 스트리밍, 나머지는 빠른 비스트리밍으로 분기한다.
+        if PROVIDER == "claude":
+            answer_box = st.empty()
+            text = ""
+            steps_shown = False
             try:
-                text = run_chat(user_text, build_system_prompt(), run_tool, on_step=on_step)
+                with st.spinner("에이전트가 처리 중..."):
+                    for chunk in run_chat_stream(
+                        user_text, build_system_prompt(lang), run_tool, on_step=on_step
+                    ):
+                        if not chunk:
+                            continue
+                        if not steps_shown:
+                            render_steps_panel()  # 첫 토큰 시점엔 tool 단계가 끝나 있다.
+                            steps_shown = True
+                        text += chunk
+                        answer_box.markdown(strip_emoji(text))
+                if not steps_shown:
+                    render_steps_panel()
+                text = strip_emoji(text)
+                answer_box.markdown(text)
             except Exception as e:
                 text = f"오류: {e}"
-        # 처리 과정 표시(실제 호출된 tool 단계). 답변 위에 둔다.
-        with proc_box:
-            if steps:
-                st.markdown("**처리 과정**")
-                for i, s in enumerate(steps, 1):
-                    render_step(i, s["name"], s["args"], s["output"])
-                st.markdown("**답변**")
-        st.write(text)
+                answer_box.markdown(text)
+        else:
+            with st.spinner("에이전트가 처리 중..."):
+                try:
+                    text = run_chat(user_text, build_system_prompt(lang), run_tool, on_step=on_step)
+                except Exception as e:
+                    text = f"오류: {e}"
+            render_steps_panel()
+            st.write(text)
 
     st.session_state["messages"].append(
         {"role": "assistant_display", "text": text, "steps": steps}

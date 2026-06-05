@@ -153,6 +153,50 @@ def _run_claude(history: list[dict], system: str, run_tool) -> tuple[str, list[d
     )
 
 
+def _stream_claude(history: list[dict], system: str, run_tool):
+    """Anthropic tool use 루프의 스트리밍 변형. 최종 답변 텍스트를 토큰 단위로 yield한다.
+
+    매 턴을 client.messages.stream()으로 받는다. tool_use 턴은 텍스트가 거의 없어 yield할 게
+    없고, tool을 실행한 뒤 다음 턴으로 넘어간다. 마지막 텍스트 턴이 토큰 단위로 흐른다.
+    OpenAI 호환 경로와 달리 Claude는 실제로 토큰이 조각조각 도착해 스트리밍 효과가 난다."""
+    from anthropic import Anthropic
+
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError("LLM_PROVIDER=claude인데 ANTHROPIC_API_KEY가 없습니다.")
+    client = Anthropic(api_key=key)
+    sys_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+    tools = _anthropic_tools()
+
+    for _ in range(MAX_TOOL_ITERATIONS):
+        with client.messages.stream(
+            model=CLAUDE_MODEL,
+            max_tokens=1500,
+            system=sys_blocks,
+            tools=tools,
+            messages=history,
+        ) as stream:
+            for event in stream.text_stream:
+                if event:
+                    yield event  # 텍스트 델타를 즉시 흘린다.
+            final = stream.get_final_message()
+        if final.stop_reason != "tool_use":
+            history.append({"role": "assistant", "content": final.content})
+            return  # 텍스트 턴 종료. 스트리밍이 자연히 끝난다.
+        history.append({"role": "assistant", "content": final.content})
+        results = []
+        for block in final.content:
+            if block.type == "tool_use":
+                out = run_tool(block.name, dict(block.input))
+                results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(out, ensure_ascii=False),
+                })
+        history.append({"role": "user", "content": results})
+    yield "\n\n요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요."
+
+
 # --- OpenAI 호환 경로 (ollama / gemini / groq 공용) ---
 
 def _run_openai_compat(cfg: dict, history: list[dict], system: str, run_tool) -> tuple[str, list[dict]]:
@@ -393,9 +437,9 @@ def run_chat_stream(user_text: str, system: str, run_tool, on_step=None):
             }
 
     if PROVIDER == "claude":
-        # claude는 비스트리밍 결과를 한 번에 흘린다.
-        text = run_chat(user_text, system, run_tool, on_step=on_step)
-        yield text
+        # Claude는 네이티브 토큰 스트리밍을 쓴다.
+        history = [{"role": "user", "content": user_text}]
+        yield from _stream_claude(history, system, traced_run_tool)
         return
     cfg = _OPENAI_COMPAT.get(PROVIDER)
     if cfg is None:
