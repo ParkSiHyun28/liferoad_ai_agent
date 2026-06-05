@@ -2,9 +2,13 @@
 
 다국어 지원: 외국인 사용자가 모국어로 금융 상담을 받게 한다. 답변 언어를 인자로 받아
 시스템 프롬프트에 그 언어로 답하라는 지시를 끼운다. tool 데이터(카드 등)는 한국어 원본을
-유지하되 LLM이 사용자에게 전달하는 답변 문장만 선택 언어로 생성한다."""
+유지하되 LLM이 사용자에게 전달하는 답변 문장만 선택 언어로 생성한다.
 
-from shared.personas import get_persona
+참고: get_persona는 모듈 레벨에서 import하지 않는다. shared.personas와의 모듈 로드
+순서에 따른 순환 import를 피하려고 함수 안에서 지연 import한다."""
+
+# 타입 힌트(str | None 등)를 문자열로 지연 평가해 낮은 파이썬 버전에서도 안 깨지게 한다.
+from __future__ import annotations
 
 # 지원 언어. 키는 코드 식별자, name은 사람이 읽을 라벨, instruct는 LLM에 주는 답변 언어 지시.
 LANGUAGES = {
@@ -31,6 +35,7 @@ def default_lang_for_persona(persona_id: str) -> str:
     country가 미지정이거나 LANGUAGES에 instruct가 없는 언어면 ko로 폴백한다.
     참고: 데모 기본값은 app.py가 'ko'로 고정한다. 이 함수는 모국어 유도가
     필요할 때 쓰는 보조 도구다."""
+    from shared.personas import get_persona  # 지연 import로 순환을 피한다
     try:
         p = get_persona(persona_id)
     except ValueError:
@@ -72,6 +77,7 @@ def _persona_block(persona_id: str | None) -> str:
     persona_id가 없거나 알 수 없으면 빈 문자열을 돌려줘 기존 톤을 유지한다."""
     if not persona_id:
         return ""
+    from shared.personas import get_persona  # 지연 import로 순환을 피한다
     try:
         p = get_persona(persona_id)
     except ValueError:

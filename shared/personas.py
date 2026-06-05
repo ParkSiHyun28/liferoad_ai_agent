@@ -1,5 +1,9 @@
 """두 페르소나 공용 데이터. 모든 부문이 이 모듈을 import 한다."""
 
+# 타입 힌트(tuple[int, int] 등)를 문자열로 지연 평가한다.
+# 배포 환경의 파이썬 버전이 낮아도 어노테이션이 런타임에 안 깨지게 한다.
+from __future__ import annotations
+
 PERSONAS = {
     "minh": {
         "id": "minh",

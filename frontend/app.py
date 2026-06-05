@@ -3,6 +3,8 @@
 대화 모드의 LLM 공급자는 llm_provider.py가 LLM_PROVIDER 환경변수로 분기한다(ollama/claude).
 대화 모드는 LLM이 어떤 tool을 어떤 순서로 호출하는지 '처리 과정' 패널로 단계별 시각화한다."""
 
+from __future__ import annotations  # 타입 힌트를 문자열로 지연 평가(낮은 파이썬 버전 안전)
+
 import os
 import sys
 
