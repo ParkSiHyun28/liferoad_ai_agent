@@ -54,13 +54,18 @@ python -m pytest -v
 
 | 공급자 | 설정값 | 키 | 비용 | 특징 |
 |---|---|---|---|---|
-| **Gemini** | `gemini` | `GEMINI_API_KEY` (AIza…) | 무료 1,500회/일 | 한국어 안정 + tool 정확. **현재 기본 권장** |
-| Groq | `groq` | `GROQ_API_KEY` (gsk_…) | 무료 14,400회/일 | 초고속(0.7초). tool 호출 보정 작업 중 |
-| Ollama | `ollama` | 불필요 | 무료 로컬 | 인터넷 없이 구동. 느리고 한국어 가끔 깨짐 |
-| Claude | `claude` | `ANTHROPIC_API_KEY` | 유료 | 본선용. 최고 품질 |
+| **Gemini** | `gemini` | `GEMINI_API_KEY` (AIza…) | 무료 | 한국어 안정 + tool 정확. tool 질문 약 3~4초. **현재 기본값** |
+| Groq | `groq` | `GROQ_API_KEY` (gsk_…) | 무료 | Llama 3.3 70B는 긴 한국어 프롬프트에서 tool 형식 오류가 잦아 재시도로 느려진다. 비권장 |
+| Ollama | `ollama` | 불필요 | 무료 로컬 | 인터넷 없이 구동. 4b 모델은 한 턴 20초대로 느리고 한국어 가끔 깨짐 |
+| Claude | `claude` | `ANTHROPIC_API_KEY` | 유료 | 본선용. 최고 품질. 진짜 토큰 스트리밍 |
 
-- 무료 키 발급: Gemini는 https://aistudio.google.com/apikey , Groq는 https://console.groq.com (둘 다 카드 불필요).
+> Gemini 무료 티어는 모델별 일일 한도가 있다. `gemini-2.5-flash`는 한도가 빡빡하니 시연 전 새 프로젝트 키를 발급해 두면 안정적이다. 발급은 https://aistudio.google.com/apikey 에서 카드 없이 된다.
+
+- 기본 공급자는 `gemini`다. 로컬에서 ollama로 바꾸려면 `.env`에 `LLM_PROVIDER=ollama`를 추가한다.
+- 무료 키 발급: Gemini는 https://aistudio.google.com/apikey / Groq는 https://console.groq.com (둘 다 카드 불필요).
 - `.env`는 깃에 안 올라간다(`.gitignore`). 각자 자기 키를 `.env`에 넣는다. 견본은 `.env.example`.
+
+> **보안 권고** — 로컬 `.env`의 키가 외부에 노출된 적이 있으면(공유 또는 스크린샷 등) Google AI Studio와 Groq 콘솔에서 키를 재발급(rotate)하라. `.env`는 절대 커밋하지 않는다.
 
 ---
 
@@ -96,3 +101,36 @@ python -m pytest -v
 - **fraud (사기탐지)** — 미합류. 폴더 오면 `mcp_servers/fraud/`에 넣으면 자동 연결된다.
 
 페르소나 2명(동결): `minh` 응웬 반 민(베트남 E-9 근로자), `suman` 수만 라이(네팔 D-2 유학생).
+
+---
+
+## 6. 온라인 배포 (Streamlit Community Cloud)
+
+### 배포 전 확인
+- `.streamlit/secrets.example.toml`을 열어 필요한 키 목록을 파악한다.
+- `.env`나 `secrets.toml`이 커밋에 포함되지 않았는지 `git status`로 확인한다.
+
+### 단계별 배포 절차
+
+1. **GitHub에 push**
+   ```bash
+   git push origin main
+   ```
+
+2. **Streamlit Cloud에서 앱 생성**
+   - https://share.streamlit.io 에 접속한다.
+   - "New app" 클릭 후 `ParkSiHyun28/liferoad_ai_agent` 리포지토리를 선택한다.
+   - 브랜치: `main` / 메인 파일 경로: `frontend/app.py`
+
+3. **Secrets 입력**
+   - "Advanced settings" 탭 안의 "Secrets" 섹션을 클릭한다.
+   - `.streamlit/secrets.example.toml` 내용을 복사한다.
+   - 플레이스홀더(`AIza_여기에_실제_키` 등)를 실제 Gemini API 키로 교체한 뒤 붙여넣는다.
+
+4. **Deploy 클릭**
+   - 빌드가 끝나면 `https://<앱이름>.streamlit.app` 형태의 공개 URL이 생성된다.
+
+5. **본선(Claude) 전환**
+   - Streamlit Cloud 앱 설정의 Secrets 탭에서 `LLM_PROVIDER = "claude"`로 바꾼다.
+   - `ANTHROPIC_API_KEY = "sk-ant-..."` 줄을 추가한다.
+   - Save 후 Reboot App을 누르면 즉시 반영된다.
