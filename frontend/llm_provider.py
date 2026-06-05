@@ -24,7 +24,12 @@ _EMOJI_RE = re.compile(
 )
 # 한자(CJK) 제거용. 로컬 모델이 가끔 중국어를 섞는다(벤치에서 qwen3.5:4b 한자 1회 누출 관측).
 # 우리 도메인은 외국인 금융 상담이라 순한국어가 정상이고 한자는 누출이므로 제거한다.
+# (아래 _HANZI_RE 다음 줄에 ZWJ 정리 정규식과 tool 루프 상한을 둔다.)
+# _EMOJI_JOINER_RE: 이모지 코드포인트 제거 후 남는 ZWJ(U+200D)와 변이 선택자(U+FE0F) 잔여물 정리.
+# MAX_TOOL_ITERATIONS: 모델이 같은 tool을 무한 호출하는 병적 상태 방지(한 답변 tool 2~4개면 충분, 8 여유).
 _HANZI_RE = re.compile("[㐀-䶿一-鿿豈-﫿]+")
+_EMOJI_JOINER_RE = re.compile("[\u200d\ufe0f]+")
+MAX_TOOL_ITERATIONS = 8
 
 
 def strip_emoji(text: str) -> str:
@@ -33,14 +38,17 @@ def strip_emoji(text: str) -> str:
         return text
     out = _EMOJI_RE.sub("", text)
     out = _HANZI_RE.sub("", out)
+    out = _EMOJI_JOINER_RE.sub("", out)
     # 제거 자리에 남은 연속 공백과 줄머리 공백과 빈 괄호를 정리한다.
     out = re.sub(r"\(\s*\)", "", out)
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"^[ \t]+", "", out, flags=re.MULTILINE)
     return out
 
-# 공급자 설정. 기본은 무료 시연용 ollama.
-PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
+# 공급자 설정. 기본은 무료 클라우드 Gemini.
+# 배포(Streamlit Cloud)에는 로컬 ollama 서버가 없으므로 ollama를 기본으로 두면 첫 요청이 깨진다.
+# 로컬에서 ollama를 쓰려면 .env에 LLM_PROVIDER=ollama로 덮어쓴다.
+PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").lower()
 
 # claude 경로 설정
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")
@@ -115,7 +123,7 @@ def _run_claude(history: list[dict], system: str, run_tool) -> tuple[str, list[d
     sys_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
     tools = _anthropic_tools()
 
-    while True:
+    for _ in range(MAX_TOOL_ITERATIONS):
         resp = client.messages.create(
             model=CLAUDE_MODEL,
             max_tokens=1500,
@@ -138,6 +146,11 @@ def _run_claude(history: list[dict], system: str, run_tool) -> tuple[str, list[d
                     "content": json.dumps(out, ensure_ascii=False),
                 })
         history.append({"role": "user", "content": results})
+    # 상한 도달. 무한 루프 대신 안내 텍스트로 종료한다.
+    return (
+        "요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요.",
+        history,
+    )
 
 
 # --- OpenAI 호환 경로 (ollama / gemini / groq 공용) ---
@@ -166,7 +179,8 @@ def _run_openai_compat(cfg: dict, history: list[dict], system: str, run_tool) ->
     messages = [{"role": "system", "content": sys_text}] + history
 
     def _create():
-        """tool_use_failed(groq 간헐 400)면 재시도한다. 다른 오류는 그대로 올린다."""
+        """tool_use_failed(groq 간헐 400)면 재시도한다. 다른 오류는 그대로 올린다.
+        ollama(key_env None)일 때 연결 실패는 친절한 안내 메시지로 변환해 올린다."""
         from openai import BadRequestError
         last = None
         for _ in range(cfg.get("tool_retry", 0) + 1):
@@ -179,9 +193,19 @@ def _run_openai_compat(cfg: dict, history: list[dict], system: str, run_tool) ->
                 if "tool_use_failed" not in str(e):
                     raise
                 last = e  # 간헐 버그. 다시 시도.
+            except (ConnectionError, OSError) as e:
+                # ollama는 로컬 서버가 없으면 연결 거부(ConnectionRefusedError/OSError)가 난다.
+                # Streamlit Cloud처럼 로컬 Ollama를 띄울 수 없는 환경에서 명확한 안내를 준다.
+                if cfg.get("key_env") is None:
+                    raise RuntimeError(
+                        "LLM_PROVIDER=ollama는 로컬 Ollama 서버(localhost:11434)가 필요합니다. "
+                        "Streamlit Cloud에선 LLM_PROVIDER=gemini로 설정하고 "
+                        "GEMINI_API_KEY를 Secrets에 넣으세요."
+                    ) from e
+                raise
         raise last
 
-    while True:
+    for _ in range(MAX_TOOL_ITERATIONS):
         resp = _create()
         msg = resp.choices[0].message
         if not msg.tool_calls:
@@ -202,13 +226,22 @@ def _run_openai_compat(cfg: dict, history: list[dict], system: str, run_tool) ->
             ],
         })
         for tc in msg.tool_calls:
-            args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+            # 모델이 깨진 JSON 인자를 뱉으면 빈 인자로 폴백
+            try:
+                args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+            except json.JSONDecodeError:
+                args = {}
             out = run_tool(tc.function.name, args)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "content": json.dumps(out, ensure_ascii=False),
             })
+    # 상한 도달. 무한 루프 대신 안내 텍스트로 종료한다.
+    return (
+        "요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요.",
+        messages,
+    )
 
 
 def run_chat(user_text: str, system: str, run_tool, on_step=None) -> str:
@@ -221,11 +254,23 @@ def run_chat(user_text: str, system: str, run_tool, on_step=None) -> str:
              kind="tool_call"이면 payload={name, args, output}. 시각화 패널이 이걸 받는다.
     """
     # run_tool을 감싸 호출 단계를 on_step으로 흘린다. 실제 동작과 100% 일치한다.
+    # tool 실행 실패 시 앱이 죽지 않도록 예외를 잡아 안전한 dict를 반환한다.
     def traced_run_tool(name, args):
-        out = run_tool(name, args)
-        if on_step:
-            on_step("tool_call", {"name": name, "args": dict(args), "output": out})
-        return out
+        try:
+            out = run_tool(name, args)
+            if on_step:
+                on_step("tool_call", {"name": name, "args": dict(args), "output": out})
+            return out
+        except Exception as e:
+            if on_step:
+                on_step("tool_error", {"name": name, "args": dict(args), "error": str(e)})
+            # LLM에게 오류 내용을 돌려줘 사과 답변을 생성하게 한다. 예외를 다시 올리지 않는다.
+            return {
+                "summary": f"{name} 처리 중 오류: {e}",
+                "detail": "",
+                "numbers": {},
+                "card": None,
+            }
 
     if PROVIDER == "claude":
         history = [{"role": "user", "content": user_text}]
@@ -239,3 +284,123 @@ def run_chat(user_text: str, system: str, run_tool, on_step=None) -> str:
     history = [{"role": "user", "content": user_text}]
     text, _ = _run_openai_compat(cfg, history, system, traced_run_tool)
     return strip_emoji(text)
+
+
+# --- 스트리밍 경로 (OpenAI 호환 공급자 전용) ---
+
+def _stream_openai_compat(cfg: dict, history: list[dict], system: str, run_tool):
+    """OpenAI 호환 tool calling 루프의 스트리밍 변형. 최종 답변 토큰을 yield한다.
+
+    동작: 매 assistant 턴을 stream=True로 받는다. delta.content는 즉시 yield하고
+    delta.tool_calls는 버퍼에 모은다. 턴이 끝났을 때 tool_calls가 있으면 tool을 실행하고
+    다음 턴으로 넘어간다(이 턴의 content는 보통 비어 있어 yield할 것이 없다).
+    tool_calls가 없으면 그 턴의 content가 최종 답변이므로 스트리밍이 자연히 끝난다.
+
+    tool 결정 턴은 content가 거의 없어 사용자에겐 마지막 답변만 흐르는 것처럼 보인다.
+    groq의 tool_use_failed 재시도(비스트리밍)는 스트리밍에선 적용하지 않는다. groq는
+    스트리밍 대상이 아니라 기본 공급자 gemini를 전제로 한다."""
+    from openai import OpenAI
+
+    key_env = cfg["key_env"]
+    if key_env:
+        key = os.environ.get(key_env)
+        if not key:
+            raise RuntimeError(f"LLM_PROVIDER={PROVIDER}인데 {key_env}가 없습니다.")
+    else:
+        key = "ollama"
+    client = OpenAI(base_url=cfg["base_url"], api_key=key)
+    tools = _openai_tools()
+    sys_text = system + ("\n\n/no_think" if cfg["no_think"] else "")
+    messages = [{"role": "system", "content": sys_text}] + history
+
+    for _ in range(MAX_TOOL_ITERATIONS):
+        stream = client.chat.completions.create(
+            model=cfg["model"], messages=messages, tools=tools,
+            max_tokens=1500, stream=True,
+        )
+        content_parts = []
+        # tool_calls 조립용. 스트리밍은 index별로 조각이 나뉘어 온다.
+        tool_acc = {}  # index -> {"id", "name", "args"}
+        for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                content_parts.append(delta.content)
+                yield delta.content  # 최종 답변 토큰을 즉시 흘린다.
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    slot = tool_acc.setdefault(tc.index, {"id": "", "name": "", "args": ""})
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function and tc.function.name:
+                        slot["name"] += tc.function.name
+                    if tc.function and tc.function.arguments:
+                        slot["args"] += tc.function.arguments
+
+        if not tool_acc:
+            return  # tool 호출 없음. 흐른 content가 최종 답변이다.
+
+        # tool 호출 턴 보존 후 실행
+        messages.append({
+            "role": "assistant",
+            "content": "".join(content_parts) or "",
+            "tool_calls": [
+                {
+                    "id": slot["id"],
+                    "type": "function",
+                    "function": {"name": slot["name"], "arguments": slot["args"]},
+                }
+                for slot in tool_acc.values()
+            ],
+        })
+        for slot in tool_acc.values():
+            try:
+                args = json.loads(slot["args"]) if slot["args"] else {}
+            except json.JSONDecodeError:
+                args = {}
+            out = run_tool(slot["name"], args)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": slot["id"],
+                "content": json.dumps(out, ensure_ascii=False),
+            })
+    yield "\n\n요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요."
+
+
+def run_chat_stream(user_text: str, system: str, run_tool, on_step=None):
+    """스트리밍 진입점. 최종 답변을 토큰 단위로 yield하는 제너레이터를 반환한다.
+
+    claude는 스트리밍 변형을 따로 두지 않고 run_chat 결과를 한 번에 yield해 폴백한다.
+    OpenAI 호환 공급자(gemini/groq/ollama)는 토큰 단위로 흐른다.
+    tool 호출 단계는 on_step으로 즉시 보고된다(run_chat과 동일 계약).
+    이모지와 한자 누출은 스트림 토큰 단위로는 깨끗이 못 지우므로, app 쪽에서 최종 누적 텍스트에
+    strip_emoji를 한 번 더 적용하도록 한다. 여기서는 토큰을 가공 없이 흘린다."""
+    def traced_run_tool(name, args):
+        try:
+            out = run_tool(name, args)
+            if on_step:
+                on_step("tool_call", {"name": name, "args": dict(args), "output": out})
+            return out
+        except Exception as e:
+            if on_step:
+                on_step("tool_error", {"name": name, "args": dict(args), "error": str(e)})
+            return {
+                "summary": f"{name} 처리 중 오류: {e}",
+                "detail": "",
+                "numbers": {},
+                "card": None,
+            }
+
+    if PROVIDER == "claude":
+        # claude는 비스트리밍 결과를 한 번에 흘린다.
+        text = run_chat(user_text, system, run_tool, on_step=on_step)
+        yield text
+        return
+    cfg = _OPENAI_COMPAT.get(PROVIDER)
+    if cfg is None:
+        raise RuntimeError(
+            f"알 수 없는 LLM_PROVIDER={PROVIDER}. 가능: claude, ollama, gemini, groq."
+        )
+    history = [{"role": "user", "content": user_text}]
+    yield from _stream_openai_compat(cfg, history, system, traced_run_tool)
