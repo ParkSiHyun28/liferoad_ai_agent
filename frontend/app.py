@@ -24,7 +24,7 @@ bridge_secrets()
 
 import random
 
-from shared.system_prompt import build_system_prompt, LANGUAGES, default_lang_for_persona, detect_lang
+from shared.system_prompt import build_system_prompt, LANGUAGES, detect_lang
 from shared.personas import (
     PERSONAS, get_persona, all_personas, make_random_personas, register_personas,
 )
@@ -71,6 +71,22 @@ def render_card(card: dict):
         f"<div style='font-size:17px;color:#F2E9D8'><b>{card['head']}</b></div>"
         f"<div style='color:#93A0B8;margin-top:6px'>{card['body']}</div>"
         f"<div style='color:#E7B85C;font-family:monospace;margin-top:6px'>{card['metric']}</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_persona_card(p: dict):
+    """첫 화면에서 지금 상담 중인 사람이 누구인지 한눈에 보여주는 요약 카드.
+    비자와 체류 상황을 박아 '에이전트가 이 사람을 인식하고 있다'를 시각적으로 드러낸다."""
+    st.markdown(
+        "<div style='border:1px solid #5A4D26;border-left:4px solid #E7B85C;"
+        "border-radius:8px;padding:14px;background:#16223C;margin:6px 0'>"
+        f"<div style='font-size:17px;color:#F2E9D8'><b>[{p['flag']}] {p['name']}</b> "
+        f"<span style='color:#93A0B8;font-size:14px'>({p['name_en']})</span></div>"
+        f"<div style='color:#93A0B8;margin-top:6px'>{p['country']} / {p['visa']} {p['role']} / "
+        f"입국 {p['entry_date']} / 출국 예정 {p['exit_plan']}</div>"
+        f"<div style='color:#8FA3BE;margin-top:6px;font-size:14px'>{p['summary']}</div>"
         "</div>",
         unsafe_allow_html=True,
     )
@@ -138,6 +154,13 @@ persona_id = st.sidebar.selectbox(
     index=default_idx,
     format_func=lambda k: f"[{PERS[k]['flag']}] {PERS[k]['name']} ({PERS[k]['visa']} {PERS[k]['role']})",
 )
+
+# 페르소나가 바뀌면 대화 이력을 비운다. 다른 사람 상담이 시작되므로 선택지와 누적
+# 사용 이력도 새 사람 기준으로 초기화돼야 한다(엉뚱한 사람의 선택지가 남는 것 방지).
+if st.session_state.get("_active_persona") != persona_id:
+    st.session_state["_active_persona"] = persona_id
+    st.session_state["messages"] = []
+    st.session_state.pop("pending_intent", None)
 
 # 답변 언어. 기본은 '자동감지'다. 사용자가 입력한 질문의 언어를 감지해 같은 언어로 답한다.
 # 외국인이 모국어로 물으면 모국어로, 심사위원이 한국어로 물으면 한국어로 자연히 분기된다.
@@ -243,52 +266,192 @@ NEXT_HEADER = {
     "ne": "अब म तपाईंलाई के मद्दत गरूँ?",
 }
 
+# 첫 화면 선제 선택지 헤더. 대화 시작 전 페르소나 카드 아래에 띄운다.
+START_HEADER = {
+    "ko": "이런 것을 도와드릴 수 있습니다. 무엇부터 할까요?",
+    "en": "Here is how I can help. Where shall we start?",
+    "vi": "Tôi có thể giúp những việc sau. Bắt đầu từ đâu?",
+    "ne": "म यी कुराहरूमा मद्दत गर्न सक्छु। कहाँबाट सुरु गरौं?",
+}
 
-def next_actions(persona_id: str, used_tools: set[str], limit: int = 3) -> list[tuple[str, dict]]:
-    """이 페르소나에게 의미 있는 '다음 행동' 후보를 만든다(하이브리드 방식).
+# 버튼이 눌렸을 때 LLM에 보낼 '사용자 의도' 자연어 문장.
+# 버튼을 그냥 tool 직접 실행으로 처리하지 않는다. 이 문장을 일반 질문과 똑같이 LLM에 보낸다.
+# 그러면 에이전트가 상황을 보고 어떤 tool을 쓸지 스스로 판단한다(진짜 능동성).
+# 답변 언어는 별도로 강제하므로 여기 문구의 언어는 LLM 판단용일 뿐 노출 언어와 무관하다.
+ACTION_INTENT = {
+    "deadline_radar": "다가오는 마감 기한이 있는지 확인하고 알려주세요.",
+    "pension_estimator": "제가 받을 수 있는 연금 반환일시금이 얼마인지 계산해 주세요.",
+    "collateral_calc": "제 예금으로 받을 수 있는 담보대출 한도를 계산해 주세요.",
+    "remit_optimizer": "본국 송금 비용을 줄일 수 있는 더 싼 경로를 찾아 주세요.",
+    "credit_builder": "한국에서 신용 점수를 쌓으려면 어떻게 해야 하는지 알려주세요.",
+    "compliance_reason": "제 비자로 일을 할 수 있는지 자격을 확인해 주세요.",
+    "form_autofill": "필요한 신청서를 제 정보로 자동 작성해 주세요.",
+    "perception_parse": "제 서류에 문제가 없는지 점검해 주세요.",
+}
 
-    active_plan으로 페르소나 속성에 맞는 tool 계획을 만든 뒤,
-    방금 답변에서 이미 실행한 tool(used_tools)은 제거해 자연스러운 다음 단계만 남긴다.
-    ACTION_LABELS에 문구가 정의된 tool만 버튼으로 노출한다.
-    최대 limit개까지 보여준다(버튼이 너무 많으면 산만하므로)."""
+
+# 작업 흐름 후속 관계 그래프. 방금 한 작업 -> 자연스러운 다음 작업 후보(우선순위 순).
+# 단순히 '안 쓴 tool 아무거나'가 아니라 방금 한 일과 논리로 이어지는 다음 단계를 먼저 제안한다.
+# 예: 연금 반환일시금을 계산했으면 다음은 청구서 자동작성, 그 다음은 받은 돈 송금 경로.
+# 우리 서비스 3원리 중 '대리처리'를 살려 대부분 흐름이 form_autofill(서류 대행)로 수렴한다.
+FOLLOWUP = {
+    "pension_estimator": ["form_autofill", "deadline_radar", "remit_optimizer"],
+    "deadline_radar": ["form_autofill", "perception_parse", "pension_estimator"],
+    "collateral_calc": ["credit_builder", "form_autofill", "remit_optimizer"],
+    "credit_builder": ["collateral_calc", "form_autofill", "deadline_radar"],
+    "compliance_reason": ["form_autofill", "perception_parse", "deadline_radar"],
+    "perception_parse": ["form_autofill", "deadline_radar", "compliance_reason"],
+    "remit_optimizer": ["pension_estimator", "form_autofill", "deadline_radar"],
+    "form_autofill": ["deadline_radar", "perception_parse", "remit_optimizer"],
+}
+
+
+def next_actions(persona_id: str, used_tools: set[str], limit: int = 3,
+                 last_tool: str | None = None) -> list[tuple[str, dict]]:
+    """이 페르소나에게 의미 있는 '다음 행동' 후보를 만든다(작업 흐름 기반).
+
+    핵심은 방금 한 작업(last_tool)의 자연스러운 후속을 먼저 제안하는 것이다.
+    FOLLOWUP 그래프로 방금 일과 논리로 이어지는 다음 단계를 우선 배치한 뒤,
+    부족분을 페르소나 속성 계획(active_plan)으로 채운다.
+
+    필터:
+    - 이미 실행한 tool(used_tools)은 다시 제안하지 않는다(같은 보기 반복 방지).
+    - 그 페르소나에게 의미 있는 tool만(active_plan에 든 것). 엉뚱한 후속을 막는다.
+    - ACTION_LABELS에 문구가 있는 tool만 버튼으로 노출한다.
+    last_tool이 없으면(첫 화면) 페르소나 계획 순서대로만 채운다."""
     plan = active_plan(persona_id)
+    # 이 페르소나에게 의미 있는 tool 집합과 기본 args. FOLLOWUP 후보를 이 안으로만 좁힌다.
+    plan_tools = {tname: targs for tname, targs in plan}
+
+    def usable(tname: str) -> bool:
+        return (tname not in used_tools
+                and tname in ACTION_LABELS
+                and tname in plan_tools)
+
     seen: set[str] = set()
     out: list[tuple[str, dict]] = []
-    for tname, targs in plan:
-        if tname in used_tools:
-            continue  # 방금 한 행동은 다시 제안하지 않는다.
-        if tname in seen:
-            continue  # 같은 tool 중복 방지.
-        if tname not in ACTION_LABELS:
-            continue  # 버튼 문구가 없는 tool은 노출하지 않는다.
+
+    def push(tname: str):
+        if tname in seen or not usable(tname):
+            return
         seen.add(tname)
-        out.append((tname, targs))
+        out.append((tname, plan_tools[tname]))
+
+    # 1순위: 방금 한 작업의 후속(FOLLOWUP). 다음 단계와 관련된 버튼을 먼저 보여준다.
+    if last_tool:
+        for nxt in FOLLOWUP.get(last_tool, []):
+            push(nxt)
+            if len(out) >= limit:
+                return out
+    # 2순위: 페르소나 일반 계획으로 부족분을 채운다.
+    for tname, _ in plan:
+        push(tname)
         if len(out) >= limit:
             break
     return out
 
 
-def render_actions(actions: list, reply_lang: str, msg_key: str):
+def render_actions(actions: list, reply_lang: str, msg_key: str, header: bool = True):
     """답변 아래에 '다음 행동' 선택지 버튼을 그린다. 능동성을 눈에 보이게 만드는 핵심 UI.
 
     actions: next_actions가 만든 (tool_name, args) 리스트.
     reply_lang: 버튼 라벨을 보여줄 언어(자동감지된 응답 언어).
     msg_key: 버튼 위젯 key 충돌을 막는 접두어(메시지 식별자). 과거 메시지의 버튼과 안 겹치게 한다.
+    header: NEXT_HEADER caption을 직접 그릴지. 첫 화면은 호출부가 START_HEADER를 따로 그리므로 False.
 
-    버튼이 눌리면 session_state['pending_action']에 (tool, args, lang)을 담고 rerun한다.
-    실제 tool 실행은 스크립트 상단의 pending_action 처리 블록이 맡는다."""
+    버튼이 눌리면 session_state['pending_intent']에 의도 문장을 담고 rerun한다.
+    실제 처리는 스크립트 상단의 pending_intent 처리 블록(run_agent_turn)이 맡는다."""
     if not actions:
         return
-    st.caption(NEXT_HEADER.get(reply_lang, NEXT_HEADER["ko"]))
+    if header:
+        st.caption(NEXT_HEADER.get(reply_lang, NEXT_HEADER["ko"]))
     cols = st.columns(len(actions))
     for col, (tname, targs) in zip(cols, actions):
         label = ACTION_LABELS.get(tname, {}).get(reply_lang) \
             or ACTION_LABELS.get(tname, {}).get("ko") or tname
         if col.button(label, key=f"act_{msg_key}_{tname}", use_container_width=True):
-            st.session_state["pending_action"] = {
-                "tool": tname, "args": dict(targs), "lang": reply_lang,
+            # 버튼은 tool을 직접 실행하지 않는다. 그 의도를 자연어 질문으로 바꿔
+            # 일반 질문과 똑같이 LLM에 보낸다. 에이전트가 상황을 보고 tool을 스스로 고른다.
+            st.session_state["pending_intent"] = {
+                "intent": ACTION_INTENT.get(tname, label),
+                "label": label,  # 대화에 남길 '사용자가 고른 행동' 표시용
+                "lang": reply_lang,
             }
             st.rerun()
+
+
+def used_tools_so_far() -> set[str]:
+    """이번 대화에서 지금까지 실제로 실행된 모든 tool 이름의 합집합.
+    마지막 메시지 한 개가 아니라 전체 이력을 본다. 같은 선택지가 계속 뜨던 버그의 핵심 수정.
+    페르소나가 바뀌면 history_reset이 messages를 비우므로 자연히 새 사람 기준으로 초기화된다."""
+    used: set[str] = set()
+    for m in st.session_state.get("messages", []):
+        if m.get("role") == "assistant_display":
+            used.update(m.get("used_tools", []))
+    return used
+
+
+def last_used_tool() -> str | None:
+    """가장 최근 assistant 답변에서 마지막으로 실행한 tool 이름.
+    다음 행동 선택지에서 '방금 한 작업의 후속'을 우선 배치하는 기준으로 쓴다.
+    LLM이 한 답변에서 여러 tool을 쓰면 마지막 것을 핵심 작업으로 본다."""
+    for m in reversed(st.session_state.get("messages", [])):
+        if m.get("role") == "assistant_display":
+            ut = m.get("used_tools", [])
+            return ut[-1] if ut else None
+    return None
+
+
+def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_action: bool):
+    """사용자 발화 1건을 에이전트에 보내고 답변과 처리 과정을 messages에 남긴다.
+    일반 질문과 선택지 버튼이 같은 경로를 쓰게 하는 공통 함수.
+
+    user_intent: LLM에 보낼 실제 의도 문장(버튼이면 ACTION_INTENT, 질문이면 입력 원문).
+    reply_lang: 답변 언어 코드.
+    display_user: 대화에 남길 사용자 측 표시 텍스트(버튼이면 버튼 라벨, 질문이면 입력 원문).
+    is_action: 버튼에서 왔으면 True. 대화에 '[선택]' 칩으로 구분 표시한다.
+
+    LLM이 상황을 보고 tool을 스스로 골라 실행한다(진짜 능동성). 실제 실행된 tool을
+    used_tools로 정확히 기록해 다음 선택지에서 중복 제거가 올바르게 된다."""
+    role = "user_action" if is_action else "user_display"
+    st.session_state["messages"].append({"role": role, "text": display_user})
+
+    # 답변 언어를 user 메시지에 직접 박는다(시스템 프롬프트만으론 입력 언어에 끌려가므로).
+    lang_directive = LANGUAGES[reply_lang]["instruct"]
+    user_text = f"[페르소나: {persona_id}] [답변 언어 강제: {lang_directive}] {user_intent}"
+    steps: list = []
+
+    def on_step(kind, payload):
+        if kind == "tool_call":
+            steps.append(payload)
+        elif kind == "tool_error":
+            steps.append({
+                "name": payload["name"],
+                "args": payload.get("args", {}),
+                "output": {"error": payload["error"], "summary": f"{payload['name']} 오류"},
+            })
+
+    system = build_system_prompt(reply_lang, persona_id)
+    if PROVIDER == "claude":
+        text = ""
+        try:
+            for chunk in run_chat_stream(user_text, system, run_tool, on_step=on_step):
+                if chunk:
+                    text += chunk
+            text = strip_emoji(text)
+        except Exception as e:
+            text = f"오류: {e}"
+    else:
+        try:
+            text = run_chat(user_text, system, run_tool, on_step=on_step)
+        except Exception as e:
+            text = f"오류: {e}"
+
+    used = [s["name"] for s in steps if "name" in s]
+    st.session_state["messages"].append({
+        "role": "assistant_display", "text": text, "steps": steps,
+        "lang": reply_lang, "used_tools": used, "persona_id": persona_id,
+    })
 
 
 # 능동 모드
@@ -315,36 +478,18 @@ if "messages" not in st.session_state:
     st.session_state["messages"] = []
 
 # 선택지 버튼이 눌린 경우를 먼저 처리한다(메시지 재생보다 앞).
-# 사용자가 '다음 행동' 버튼을 누르면 그 업무를 에이전트가 대신 처리한 것으로 본다.
-# LLM을 거치지 않고 해당 tool을 직접 실행해 결과 카드를 즉시 보여준다(대리 처리, 빠르고 안정적).
-# 처리 결과는 사용자가 누른 행동(user_action)과 에이전트 답변(assistant_display)으로 대화에 남긴다.
-pending = st.session_state.pop("pending_action", None)
+# 버튼을 tool 직접 실행으로 처리하지 않는다. 그 의도를 자연어 문장으로 바꿔 LLM에 보낸다.
+# 에이전트가 상황을 보고 어떤 tool을 어떤 순서로 쓸지 스스로 판단한다(진짜 능동성).
+# 일반 질문 입력과 완전히 같은 경로(run_agent_turn)를 타므로 처리 과정 패널도 동일하게 뜬다.
+pending = st.session_state.pop("pending_intent", None)
 if pending:
-    tname = pending["tool"]
-    targs = pending["args"]
-    plang = pending["lang"]
-    # 사용자가 어떤 행동을 골랐는지 대화에 남긴다(누른 버튼 라벨).
-    action_label = ACTION_LABELS.get(tname, {}).get(plang) \
-        or ACTION_LABELS.get(tname, {}).get("ko") or tname
-    st.session_state["messages"].append({"role": "user_action", "text": action_label})
-    try:
-        out = run_tool(tname, targs)
-        st.session_state["messages"].append({
-            "role": "assistant_display",
-            "text": out.get("summary", ""),
-            "detail": out.get("detail", ""),
-            "card": out.get("card"),
-            "steps": [{"name": tname, "args": targs, "output": out}],
-            "lang": plang,
-            "used_tools": [tname],
-            "persona_id": persona_id,
-        })
-    except Exception as e:
-        st.session_state["messages"].append({
-            "role": "assistant_display",
-            "text": f"처리 중 오류가 발생했습니다: {e}",
-            "steps": [], "lang": plang, "used_tools": [], "persona_id": persona_id,
-        })
+    with st.spinner("에이전트가 처리 중..."):
+        run_agent_turn(
+            user_intent=pending["intent"],
+            reply_lang=pending["lang"],
+            display_user=pending["label"],
+            is_action=True,
+        )
 
 # 지난 대화 재생. assistant 메시지는 처리 과정과 답변을 함께 복원한다.
 # 마지막 assistant 메시지에는 '다음 행동' 선택지 버튼을 함께 그린다.
@@ -371,12 +516,29 @@ for idx, m in enumerate(st.session_state["messages"]):
             if m.get("card"):
                 render_card(m["card"])
             # 마지막 assistant 메시지에만 '다음 행동' 선택지 버튼을 붙인다.
+            # used는 이번 대화 전체에서 쓴 tool의 합집합이다(마지막 한 개가 아니라).
+            # 같은 보기가 계속 뜨던 버그를 여기서 막는다.
             if idx == last_assistant_idx:
-                used = set(m.get("used_tools", []))
+                used = used_tools_so_far()
                 pid = m.get("persona_id", persona_id)
                 mlang = m.get("lang", "ko")
-                acts = next_actions(pid, used)
+                # last_tool로 방금 한 작업의 후속을 우선 제안한다(작업 흐름 연결).
+                acts = next_actions(pid, used, last_tool=last_used_tool())
                 render_actions(acts, mlang, msg_key=str(idx))
+
+# 첫 화면 선제 선택지. 대화가 아직 비어 있을 때만 띄운다.
+# 페르소나를 인식한 요약 카드와 그 사람 상황에 맞는 행동 버튼을 먼저 보여준다.
+# 버튼을 누르면 일반 질문과 같은 경로(run_agent_turn)로 LLM이 상황을 판단해 처리한다.
+if not st.session_state["messages"]:
+    # 첫 화면 선제 선택지 언어. 기본은 한국어로 고정한다(심사 기본 언어).
+    # 페르소나 모국어를 따라가면 영어/네팔어 버튼이 섞여 첫 화면이 들쭉날쭉했다.
+    # 외국인 모국어 분기는 사용자가 질문을 입력하면 그때 자동감지로 자연히 일어난다.
+    # 단 사이드바에서 특정 언어를 명시적으로 고른 경우는 그 언어를 존중한다.
+    start_lang = "ko" if lang == "auto" else lang
+    render_persona_card(PERS[persona_id])
+    st.caption(START_HEADER.get(start_lang, START_HEADER["ko"]))
+    acts = next_actions(persona_id, set())  # 아직 쓴 tool 없음
+    render_actions(acts, start_lang, msg_key="start", header=False)
 
 prompt = st.chat_input("질문을 입력하세요")
 if prompt:
