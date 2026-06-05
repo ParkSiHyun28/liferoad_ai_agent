@@ -74,12 +74,12 @@ def perception_parse(persona_id: str, doc_type: str = "alien_registration") -> d
 
 
 def compliance_reason(persona_id: str, check_type: str = "jeonse_fraud") -> dict:
-    """준법 추론과 전세사기·비자 가드레일 심사를 한다. (Reasoning 엔진)"""
+    """준법 추론과 전세사기와 비자 가드레일 심사를 한다. (Reasoning 엔진)"""
     p = get_persona(persona_id)
 
     if check_type == "jeonse_fraud":
         risk_count = len(data.JEONSE_FRAUD_INDICATORS)
-        # E-9 근로자만 전세계약 대상 (D-2 유학생은 통상 기숙사·고시원)
+        # E-9 근로자만 전세계약 대상 (D-2 유학생은 통상 기숙사나 고시원)
         has_lease_risk = p["visa"] == "E-9"
 
         if not has_lease_risk:
@@ -251,7 +251,7 @@ def form_autofill(persona_id: str, form_id: str = "alien_registration_renewal") 
             "head": f"{form['name_ko']} {auto}/{total}개 자동완성",
             "body": (
                 f"나머지 {manual}개 항목만 직접 입력하면 제출 준비 완료. "
-                f"서명·날짜 등 본인 확인 항목입니다."
+                f"서명과 날짜 등 본인 확인 항목입니다."
             ),
             "metric": f"자동완성 {ratio * 100:.0f}%",
         },

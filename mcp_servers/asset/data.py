@@ -22,14 +22,11 @@ PENSION_TOTAL_PAYOUT_2023_KRW = 329_400_000_000
 # 미청구 휴면보험금 규모와 반환율
 UNCLAIMED_INSURANCE_KRW = 30_760_000_000
 UNCLAIMED_RETURN_RATE = 0.30
+# 출국만기보험/반환일시금 청구 소멸시효, 근로자퇴직급여보장법/국민연금법 기준
+CLAIM_DEADLINE_YEARS = 3
 # 반환일시금 월 환산 추정 보조 (납부월수 * 월 적립 추정)
 # mod_asset.js 근거: 58개월 기준 약 496만 원 → 월 약 85,517원
 PENSION_MONTHLY_REFUND_KRW = 85_517
-
-# 환율 (베트남 동 송금 기준)
-FX_BASE_KRW = 1_290   # 2022 기준
-FX_NOW_KRW = 1_370    # 2024 기준
-FX_ALERT_THRESHOLD_KRW = 1_380  # 알림 임계점
 
 # 대안신용 (Thin Filer 축적)
 CREDIT_PROFILE_MIN_MONTHS = 6   # 프로필 형성 최소 개월

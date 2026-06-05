@@ -68,7 +68,7 @@ def pension_estimator(persona_id: str) -> dict:
             "detail": (
                 f"{p['country']}은 한국과 사회보장협정이 미체결이라 {p['visa']} 근로자는 귀국 시 반환일시금 수령 대상입니다. "
                 f"납부 {months}개월 기준 예상 수령액은 약 {_won(refund)}입니다. "
-                f"2023년 외국인 반환일시금 총 지급액은 3,294억 원 규모입니다."
+                f"2023년 외국인 반환일시금 총 지급액은 {data.PENSION_TOTAL_PAYOUT_2023_KRW/1e8:,.0f}억 원 규모입니다."
             ),
             "numbers": numbers,
             "card": {
@@ -85,14 +85,14 @@ def pension_estimator(persona_id: str) -> dict:
             f"{p['country']}은 한국과 사회보장협정이 미체결입니다. "
             f"현재 납부 이력({months}개월)으로는 귀국 시 반환일시금 수령이 어렵습니다. "
             f"단 취업비자(E-7)로 전환해 한국에 남으면 납부 이력이 수령으로 이어질 수 있습니다. "
-            f"유학생 취업전환율은 {int(data.STUDENT_VISA_CONVERT_RATE*100)}.4%입니다. 이 사실을 숨기지 않고 안내합니다."
+            f"유학생 {data.STUDENT_JOB_HOPE_RATE*100:.1f}%가 한국 취업을 희망합니다. 취업전환율은 {data.STUDENT_VISA_CONVERT_RATE*100:.1f}%입니다."
         ),
         "numbers": numbers,
         "card": {
             "icon": "",
             "head": "귀국하면 연금 돌려받기 어렵습니다",
             "body": f"{p['country']}-한국 협정 미체결. 단 E-7 취업전환 시 납부 이력이 수령으로 이어집니다. 취업비자 전환 도움 필요하면 알려주세요.",
-            "metric": f"취업전환 가능성 {int(data.STUDENT_VISA_CONVERT_RATE*100)}.4%",
+            "metric": f"취업전환 가능성 {data.STUDENT_VISA_CONVERT_RATE*100:.1f}%",
         },
     }
 
@@ -201,7 +201,7 @@ def deadline_radar(persona_id: str, as_of: str) -> dict:
         "days_to_exit": days_to_exit,
         "has_severance_insurance": has_insurance,
         "severance_insurance_total_krw": insurance_total,
-        "claim_deadline_years": 3,  # 소멸시효 3년
+        "claim_deadline_years": data.CLAIM_DEADLINE_YEARS,
     }
     if not has_insurance:
         return {
@@ -214,18 +214,18 @@ def deadline_radar(persona_id: str, as_of: str) -> dict:
             "card": None,
         }
     return {
-        "summary": f"출국만기보험 약 {_won(insurance_total)} 적립 중. 출국까지 D-{days_to_exit}, 청구 마감 소멸시효 3년.",
+        "summary": f"출국만기보험 약 {_won(insurance_total)} 적립 중. 출국까지 D-{days_to_exit}, 청구 마감 소멸시효 {data.CLAIM_DEADLINE_YEARS}년.",
         "detail": (
             f"E-9 사업장은 출국만기보험 의무 가입 대상입니다. 월 통상임금의 {data.SEVERANCE_INSURANCE_RATE*100:.1f}%가 적립됩니다. "
             f"현재까지 약 {_won(insurance_total)} 적립 추정. 출국 예정일 {p['exit_plan']} 기준 D-{days_to_exit}입니다. "
-            f"소멸시효는 출국일로부터 3년이지만 청구를 모르면 소멸 위험이 있습니다. "
-            f"참고로 미청구 휴면보험금은 307.6억 원 규모이고 반환율은 30%에 그칩니다."
+            f"소멸시효는 출국일로부터 {data.CLAIM_DEADLINE_YEARS}년이지만 청구를 모르면 소멸 위험이 있습니다. "
+            f"참고로 미청구 휴면보험금은 {data.UNCLAIMED_INSURANCE_KRW/1e8:,.1f}억 원 규모이고 반환율은 {data.UNCLAIMED_RETURN_RATE*100:.0f}%에 그칩니다."
         ),
         "numbers": numbers,
         "card": {
             "icon": "",
             "head": f"출국만기보험 약 {_won(insurance_total)} 적립 중",
-            "body": "출국 후 3년 내 청구 필수. 지금 수령 절차를 미리 확인하세요.",
+            "body": f"출국 후 {data.CLAIM_DEADLINE_YEARS}년 내 청구 필수. 지금 수령 절차를 미리 확인하세요.",
             "metric": f"출국까지 D-{days_to_exit}",
         },
     }

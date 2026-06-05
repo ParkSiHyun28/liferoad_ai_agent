@@ -12,7 +12,7 @@ _PERSONA_PROP = {
 TOOL_SCHEMAS = {
     "perception_parse": {
         "name": "perception_parse",
-        "description": "OCR로 서류를 파싱하고 실명 불일치를 검출한다. 외국인등록증·여권·임대차계약서·통장사본을 지원한다.",
+        "description": "OCR로 서류를 파싱하고 실명 불일치를 검출한다. 외국인등록증, 여권, 임대차계약서, 통장사본을 지원한다.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -28,7 +28,7 @@ TOOL_SCHEMAS = {
     },
     "compliance_reason": {
         "name": "compliance_reason",
-        "description": "준법 추론과 전세사기·비자 가드레일 심사를 한다. 전세사기 위험 지표와 비자별 취업 허용 시간을 검토한다.",
+        "description": "준법 추론과 전세사기와 비자 가드레일 심사를 한다. 전세사기 위험 지표와 비자별 취업 허용 시간을 검토한다.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -44,7 +44,7 @@ TOOL_SCHEMAS = {
     },
     "form_autofill": {
         "name": "form_autofill",
-        "description": "정부 PDF 신청서를 원클릭 자동작성한다. 국민연금 반환일시금·출국만기보험·외국인등록증 갱신·세금 정산 신청서를 지원한다.",
+        "description": "정부 PDF 신청서를 원클릭 자동작성한다. 국민연금 반환일시금, 출국만기보험, 외국인등록증 갱신, 세금 정산 신청서를 지원한다.",
         "input_schema": {
             "type": "object",
             "properties": {
