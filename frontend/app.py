@@ -98,6 +98,23 @@ def split_answer_and_actions(text: str) -> tuple[str, list[str]]:
     return body.rstrip(), labels
 
 
+_DONE_MARKER = "<<DONE>>"
+
+
+def parse_done_marker(text: str) -> tuple[str, bool]:
+    """LLM 답변에서 <<DONE>> 마커를 찾아 제거하고 is_done 불리언을 함께 반환한다.
+
+    <<DONE>> 마커는 화면에 노출하지 않는다. 본문에서 제거한 뒤 is_done=True로 알린다.
+    마커가 없으면 원본 텍스트와 is_done=False를 그대로 돌려준다.
+    split_answer_and_actions 호출 전에 먼저 적용하면 기존 파싱 흐름을 그대로 유지한다."""
+    if _DONE_MARKER not in text:
+        return text, False
+    cleaned = text.replace(_DONE_MARKER, "").strip()
+    # 마커 제거 뒤 연속 빈 줄이 생기면 하나로 줄인다.
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned, True
+
+
 def run_tool(name: str, args: dict) -> dict:
     """tool을 실제 실행한다. deadline_radar의 as_of는 항상 데모 기준일로 강제한다.
     LLM이 임의 날짜를 넣어도 덮어써서 데모 일관성을 지킨다.
@@ -214,6 +231,9 @@ if st.session_state.get("_active_persona") != persona_id:
     st.session_state["_active_persona"] = persona_id
     st.session_state["messages"] = []
     st.session_state.pop("pending_intent", None)
+    # 페르소나가 바뀌면 AI 추천 캐시와 완료 작업 기록을 초기화한다.
+    st.session_state.pop("ai_intro", None)
+    st.session_state["completed_tools"] = set()
 
 # 답변 언어. 기본은 '자동감지'다. 사용자가 입력한 질문의 언어를 감지해 같은 언어로 답한다.
 # 외국인이 모국어로 물으면 모국어로, 심사위원이 한국어로 물으면 한국어로 자연히 분기된다.
@@ -327,18 +347,27 @@ START_HEADER = {
     "ne": "म यी कुराहरूमा मद्दत गर्न सक्छु। कहाँबाट सुरु गरौं?",
 }
 
-def start_action_labels(persona_id: str, reply_lang: str, limit: int = 3) -> list[str]:
+def start_action_labels(
+    persona_id: str,
+    reply_lang: str,
+    limit: int = 3,
+    exclude_tools: set | None = None,
+) -> list[str]:
     """첫 화면 선제 선택지 라벨을 만든다(정적, 페르소나 기반).
 
     첫 화면에는 아직 LLM 답변이 없어 LLM이 후속을 만들 수 없다. 그래서 여기서만
     페르소나 속성(active_plan)으로 의미 있는 행동을 골라 정적 라벨로 보여준다.
     버튼을 누르면 그 라벨 문구가 LLM에 전달되고, 이후 모든 후속 선택지는
-    LLM이 답변과 함께 직접 생성한다(split_answer_and_actions로 파싱)."""
+    LLM이 답변과 함께 직접 생성한다(split_answer_and_actions로 파싱).
+    exclude_tools: 이미 완료한 tool 이름. 해당 tool의 행동은 추천에서 뺀다."""
     plan = active_plan(persona_id)
+    excluded = exclude_tools or set()
     out: list[str] = []
     seen: set[str] = set()
     for tname, _ in plan:
         if tname in seen or tname not in ACTION_LABELS:
+            continue
+        if tname in excluded:
             continue
         seen.add(tname)
         label = ACTION_LABELS.get(tname, {}).get(reply_lang) \
@@ -358,6 +387,70 @@ _DONE_CAPTION = {
 }
 
 
+def ai_recommend_actions(
+    persona_id: str,
+    reply_lang: str,
+    exclude_tools: set | None = None,
+) -> tuple[str, list[str]]:
+    """LLM이 페르소나 상황을 읽고 첫 화면 추천 행동을 동적으로 생성한다.
+
+    반환: (인사+상황요약 본문, 추천 라벨 리스트).
+    LLM 호출 실패 또는 라벨이 비면 정적 폴백(start_action_labels)을 쓴다.
+    결과는 st.session_state["ai_intro"]에 캐싱한다. 같은 페르소나+언어로 rerun해도
+    LLM을 다시 부르지 않는다."""
+    cache_key = f"{persona_id}__{reply_lang}"
+    cached = st.session_state.get("ai_intro", {})
+    if cache_key in cached:
+        return cached[cache_key]
+
+    p = get_persona(persona_id)
+    lang_directive = LANGUAGES[reply_lang]["instruct"]
+
+    excluded = exclude_tools or set()
+    exclude_note = ""
+    if excluded:
+        done_labels = [
+            ACTION_LABELS.get(t, {}).get("ko") or t
+            for t in excluded
+            if t in ACTION_LABELS
+        ]
+        if done_labels:
+            exclude_note = f" 이미 처리한 작업은 제외해 줘: {', '.join(done_labels)}."
+
+    user_text = (
+        f"[페르소나: {persona_id}] [답변 언어 강제: {lang_directive}] "
+        f"오늘은 {TODAY}입니다. "
+        f"지금 이 사용자의 비자와 입국일과 출국 예정일과 오늘 날짜와 자산과 연금 납부 상황을 종합해 "
+        f"지금 가장 먼저 챙겨야 할 금융 행동을 우선순위로 3개 추천해 줘. "
+        f"짧은 인사와 핵심 상황 한 줄 요약 뒤에 <<NEXT>>로 추천 행동 3개를 적어 줘."
+        f"{exclude_note}"
+    )
+
+    fallback_body = f"{p['name']}님 상황을 살펴봤습니다."
+    fallback_labels = start_action_labels(persona_id, reply_lang, exclude_tools=excluded)
+
+    system = build_system_prompt(reply_lang, persona_id)
+    try:
+        raw = run_chat(user_text, system, run_tool)
+        raw = strip_emoji(raw)
+        # <<DONE>> 마커가 오면 제거(첫 화면에선 의미 없음)
+        raw, _ = parse_done_marker(raw)
+        body, labels = split_answer_and_actions(raw)
+        if not labels:
+            labels = fallback_labels
+        if not body.strip():
+            body = fallback_body
+    except Exception:
+        body = fallback_body
+        labels = fallback_labels
+
+    result = (body, labels)
+    if "ai_intro" not in st.session_state:
+        st.session_state["ai_intro"] = {}
+    st.session_state["ai_intro"][cache_key] = result
+    return result
+
+
 def render_actions(
     labels: list[str],
     reply_lang: str,
@@ -365,6 +458,7 @@ def render_actions(
     header: bool = True,
     is_start: bool = False,
     body_text: str = "",
+    show_end_button: bool = False,
 ):
     """답변 아래에 '다음 행동' 선택지 버튼을 그린다. 능동성을 눈에 보이게 만드는 핵심 UI.
 
@@ -376,25 +470,33 @@ def render_actions(
     header: NEXT_HEADER caption을 직접 그릴지. 첫 화면은 호출부가 START_HEADER를 따로 그리므로 False.
     is_start: True면 첫 화면(대화 시작 전). 종결 안내를 띄우지 않는다.
     body_text: 본문 텍스트. 종결 의도 판별에 쓴다.
+    show_end_button: 작업 매듭(is_done)일 때만 True. "대화 종료하기" 버튼을 추가로 그린다.
 
     버튼이 눌리면 그 문구 자체를 사용자 의도로 session_state['pending_intent']에 담고 rerun한다.
     문구를 그대로 LLM에 보내므로 에이전트가 그 요청을 보고 tool을 스스로 골라 처리한다."""
-    if not labels:
-        # 첫 화면이 아니고 종결 의도가 있으면 안내 caption을 띄운다.
+    if not labels and not show_end_button:
+        # 첫 화면이 아니고 라벨도 종료 버튼도 없으면 종결 안내 caption을 띄운다.
         if not is_start:
             st.caption(_DONE_CAPTION.get(reply_lang, _DONE_CAPTION["ko"]))
         return
-    if header:
+    if header and labels:
         st.caption(NEXT_HEADER.get(reply_lang, NEXT_HEADER["ko"]))
-    cols = st.columns(len(labels))
-    for i, (col, label) in enumerate(zip(cols, labels)):
-        if col.button(label, key=f"act_{msg_key}_{i}", use_container_width=True):
-            # 버튼 문구를 그대로 LLM에 보낸다. 에이전트가 상황을 보고 tool을 스스로 고른다.
-            st.session_state["pending_intent"] = {
-                "intent": label,
-                "label": label,  # 대화에 남길 '사용자가 고른 행동' 표시
-                "lang": reply_lang,
-            }
+    if labels:
+        cols = st.columns(len(labels))
+        for i, (col, label) in enumerate(zip(cols, labels)):
+            if col.button(label, key=f"act_{msg_key}_{i}", use_container_width=True):
+                # 버튼 문구를 그대로 LLM에 보낸다. 에이전트가 상황을 보고 tool을 스스로 고른다.
+                st.session_state["pending_intent"] = {
+                    "intent": label,
+                    "label": label,  # 대화에 남길 '사용자가 고른 행동' 표시
+                    "lang": reply_lang,
+                }
+                st.rerun()
+    if show_end_button:
+        if st.button("대화 종료하기", key=f"end_{msg_key}", use_container_width=False):
+            # 대화를 초기화하고 AI 추천 캐시를 무효화한다. completed_tools는 유지한다.
+            st.session_state["messages"] = []
+            st.session_state.pop("ai_intro", None)
             st.rerun()
 
 
@@ -518,21 +620,29 @@ def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_acti
         return
 
     used = [s["name"] for s in steps if "name" in s]
+    # <<DONE>> 마커를 먼저 제거하고 is_done 여부를 확인한다.
+    text_no_done, is_done = parse_done_marker(text)
     # LLM이 답변 끝에 붙인 후속 선택지(<<NEXT>>)를 본문과 분리한다.
     # 본문만 화면에 보이고, 라벨은 다음 행동 버튼이 된다(답변과 일치 보장).
-    body, next_labels = split_answer_and_actions(text)
+    body, next_labels = split_answer_and_actions(text_no_done)
 
-    # next_labels가 비고 종결 의도가 없으면 start_action_labels에서 폴백 1~2개를 채운다.
-    _DONE_WORDS = ("마쳤습니다", "완료", "모두 확인", "도움이 됐", "다른 궁금")
-    is_closing = any(w in body for w in _DONE_WORDS)
-    if not next_labels and not is_closing:
-        fallback = start_action_labels(persona_id, reply_lang, limit=2)
+    # 완료된 작업을 누적한다. 이번 턴 used_tools를 completed_tools에 쌓는다.
+    if used:
+        st.session_state["completed_tools"] = (
+            st.session_state.get("completed_tools", set()) | set(used)
+        )
+
+    # 작업이 끝나지 않았는데 next_labels가 비면 start_action_labels에서 폴백 1~2개를 채운다.
+    # 작업 종결(is_done) 시에는 폴백을 넣지 않아 종료 흐름을 막지 않는다.
+    if not next_labels and not is_done:
+        _completed = st.session_state.get("completed_tools", set())
+        fallback = start_action_labels(persona_id, reply_lang, exclude_tools=_completed)
         next_labels = fallback[:2]
 
     st.session_state["messages"].append({
         "role": "assistant_display", "text": body, "steps": steps,
         "lang": reply_lang, "used_tools": used, "persona_id": persona_id,
-        "next_labels": next_labels,
+        "next_labels": next_labels, "is_done": is_done,
     })
 
 
@@ -575,6 +685,8 @@ if st.session_state.get("run_active"):
 st.subheader("대화")
 if "messages" not in st.session_state:
     st.session_state["messages"] = []
+if "completed_tools" not in st.session_state:
+    st.session_state["completed_tools"] = set()
 
 # 선택지 버튼이 눌린 경우를 먼저 처리한다(메시지 재생보다 앞).
 # 버튼을 tool 직접 실행으로 처리하지 않는다. 그 의도를 자연어 문장으로 바꿔 LLM에 보낸다.
@@ -626,7 +738,14 @@ for idx, m in enumerate(st.session_state["messages"]):
             # 선택지는 LLM이 답변과 함께 생성한 것이다(답변에서 던진 제안과 버튼이 일치).
             if idx == last_assistant_idx:
                 mlang = m.get("lang", "ko")
-                render_actions(m.get("next_labels", []), mlang, msg_key=str(idx))
+                _is_done = m.get("is_done", False)
+                _has_completed = bool(st.session_state.get("completed_tools"))
+                render_actions(
+                    m.get("next_labels", []),
+                    mlang,
+                    msg_key=str(idx),
+                    show_end_button=(_is_done and _has_completed),
+                )
 
 # 첫 화면 선제 선택지. 대화가 아직 비어 있을 때만 띄운다.
 # 페르소나를 인식한 요약 카드와 그 사람 상황에 맞는 행동 버튼을 먼저 보여준다.
@@ -638,9 +757,32 @@ if not st.session_state["messages"]:
     # 단 사이드바에서 특정 언어를 명시적으로 고른 경우는 그 언어를 존중한다.
     start_lang = "ko" if lang == "auto" else lang
     render_persona_card(PERS[persona_id])
-    st.caption(START_HEADER.get(start_lang, START_HEADER["ko"]))
-    labels = start_action_labels(persona_id, start_lang)  # 첫 화면 정적 라벨
-    render_actions(labels, start_lang, msg_key="start", header=False, is_start=True)
+    # AI 추천 캐시 여부 확인. 캐시가 없으면 LLM을 1회 호출해 동적 추천을 생성한다.
+    _cache_key = f"{persona_id}__{start_lang}"
+    _has_cache = _cache_key in st.session_state.get("ai_intro", {})
+    _completed = st.session_state.get("completed_tools", set())
+
+    # 모든 active_plan tool을 완료했으면 별도 안내를 보여준다.
+    _plan_tools = {t for t, _ in active_plan(persona_id)}
+    _all_done = bool(_plan_tools) and _plan_tools.issubset(_completed)
+
+    if _all_done:
+        st.info("현재 챙겨야 할 주요 작업을 모두 마쳤습니다. 다른 궁금한 점이 있으면 입력해 주세요.")
+    else:
+        if not _has_cache:
+            with st.spinner("상황을 분석하고 있습니다..."):
+                intro_body, intro_labels = ai_recommend_actions(
+                    persona_id, start_lang, exclude_tools=_completed
+                )
+        else:
+            intro_body, intro_labels = ai_recommend_actions(
+                persona_id, start_lang, exclude_tools=_completed
+            )
+
+        if intro_body:
+            st.markdown(intro_body)
+        st.caption(START_HEADER.get(start_lang, START_HEADER["ko"]))
+        render_actions(intro_labels, start_lang, msg_key="start", header=False, is_start=True)
 
 prompt = st.chat_input("질문을 입력하세요")
 if prompt:
@@ -710,12 +852,13 @@ if prompt:
                             render_steps_panel()  # 첫 토큰 시점엔 tool 단계가 끝나 있다.
                             steps_shown = True
                         text += chunk
-                        # 스트리밍 중에는 <<NEXT>> 마커 이후(선택지 원문)를 숨기고 본문만 흘린다.
-                        answer_box.markdown(split_answer_and_actions(strip_emoji(text))[0])
+                        # 스트리밍 중에는 <<NEXT>> 마커와 <<DONE>> 마커 이후를 숨기고 본문만 흘린다.
+                        _preview = split_answer_and_actions(parse_done_marker(strip_emoji(text))[0])[0]
+                        answer_box.markdown(_preview)
                 if not steps_shown:
                     render_steps_panel()
                 text = strip_emoji(text)
-                answer_box.markdown(split_answer_and_actions(text)[0])
+                answer_box.markdown(split_answer_and_actions(parse_done_marker(text)[0])[0])
             except Exception as e:
                 print(repr(e), file=sys.stderr)
                 error_occurred_chat = True
@@ -752,21 +895,29 @@ if prompt:
 
     # 이번 답변에서 실제로 실행된 tool 이름을 모은다.
     used_tools = [s["name"] for s in steps if "name" in s]
+    # <<DONE>> 마커를 먼저 제거하고 is_done 여부를 확인한다.
+    text_no_done, is_done = parse_done_marker(text)
     # LLM이 답변 끝에 붙인 후속 선택지(<<NEXT>>)를 본문과 분리해 저장한다.
-    body, next_labels = split_answer_and_actions(text)
+    body, next_labels = split_answer_and_actions(text_no_done)
 
-    # next_labels가 비고 종결 의도가 없으면 start_action_labels에서 폴백 1~2개를 채운다.
-    _DONE_WORDS_CHAT = ("마쳤습니다", "완료", "모두 확인", "도움이 됐", "다른 궁금")
-    is_closing_chat = any(w in body for w in _DONE_WORDS_CHAT)
-    if not next_labels and not is_closing_chat:
-        fallback_chat = start_action_labels(persona_id, reply_lang, limit=2)
+    # 완료된 작업을 누적한다. 이번 턴 used_tools를 completed_tools에 쌓는다.
+    if used_tools:
+        st.session_state["completed_tools"] = (
+            st.session_state.get("completed_tools", set()) | set(used_tools)
+        )
+
+    # 작업이 끝나지 않았는데 next_labels가 비면 start_action_labels에서 폴백 1~2개를 채운다.
+    # 작업 종결(is_done) 시에는 폴백을 넣지 않아 종료 흐름을 막지 않는다.
+    if not next_labels and not is_done:
+        _completed = st.session_state.get("completed_tools", set())
+        fallback_chat = start_action_labels(persona_id, reply_lang, exclude_tools=_completed)
         next_labels = fallback_chat[:2]
 
     st.session_state["messages"].append(
         {
             "role": "assistant_display", "text": body, "steps": steps,
             "lang": reply_lang, "used_tools": used_tools, "persona_id": persona_id,
-            "next_labels": next_labels,
+            "next_labels": next_labels, "is_done": is_done,
         }
     )
     # 답변을 메시지로 확정한 뒤 한 번 더 그린다. 그래야 답변 바로 아래에
