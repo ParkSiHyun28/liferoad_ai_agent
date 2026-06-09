@@ -22,9 +22,9 @@ def test_collateral_calc_minh_has_no_deposit():
 
 def test_pension_estimator_minh_treaty_false_can_receive():
     result = tools.pension_estimator(persona_id="minh")
-    # 베트남 미체결 → 수령 가능. 58개월 * 85,517 = 4,959,986 ≈ 496만
+    # 베트남 미체결 → 수령 가능. 54개월 * 85,517 = 4,617,918 ≈ 462만
     assert result["numbers"]["can_receive"] is True
-    assert result["numbers"]["estimated_refund_krw"] == 58 * data.PENSION_MONTHLY_REFUND_KRW
+    assert result["numbers"]["estimated_refund_krw"] == 54 * data.PENSION_MONTHLY_REFUND_KRW
     assert result["card"] is not None
 
 

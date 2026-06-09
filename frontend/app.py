@@ -59,10 +59,26 @@ def split_answer_and_actions(text: str) -> tuple[str, list[str]]:
     LLM은 답변 끝에 `<<NEXT>>` 한 줄을 두고 그 아래 후속 행동을 한 줄씩 적도록 지시받는다.
     이 함수는 마커 앞은 화면에 보일 본문으로, 마커 뒤 각 줄은 버튼 라벨로 가른다.
     마커가 없으면(모델이 형식을 안 지킴) 본문 전체를 그대로 두고 빈 라벨 리스트를 돌려준다.
-    번호나 기호로 시작하는 줄은 기호를 떼어 정리한다. 너무 길거나 빈 줄은 버린다."""
-    if not text or _NEXT_MARKER not in text:
+    번호나 기호로 시작하는 줄은 기호를 떼어 정리한다. 너무 길거나 빈 줄은 버린다.
+    스트리밍 중 꼬리가 마커 접두사(<<NEXT 또는 <)로 끝나면 그 앞까지만 본문으로 쓴다."""
+    if not text:
         return text, []
-    body, _, tail = text.partition(_NEXT_MARKER)
+    # 스트리밍 중 마커가 부분적으로 들어온 경우: 꼬리가 마커 접두사로 끝나면 숨긴다.
+    # <<NEXT>> 가 완전히 없으면 partial_marker도 없다 → 일반 경로로 처리.
+    partial_marker_prefixes = ("<<NEXT>>", "<<NEXT>", "<<NEXT", "<<NEX", "<<NE", "<<N", "<<")
+    if _NEXT_MARKER not in text:
+        # 꼬리가 마커 접두사로 끝나면 그 앞까지만 반환(깜빡임 방지)
+        for prefix in partial_marker_prefixes[1:]:  # <<NEXT>> 제외(완전한 마커)
+            if text.endswith(prefix):
+                return text[: -len(prefix)].rstrip(), []
+        return text, []
+    # 마지막 마커 기준으로 분리(본문 중간에 우발적으로 마커가 끼면 마지막을 기준으로 함).
+    idx = text.rfind(_NEXT_MARKER)
+    body = text[:idx]
+    tail = text[idx + len(_NEXT_MARKER):]
+    # 본문이 공백뿐이면 마커 분리를 취소하고 원문을 본문으로 씀(빈 답변 말풍선 방지).
+    if not body.strip():
+        return text, []
     labels: list[str] = []
     for raw in tail.splitlines():
         line = raw.strip()
@@ -72,9 +88,9 @@ def split_answer_and_actions(text: str) -> tuple[str, list[str]]:
         line = re.sub(r"^[\-\*•]\s*", "", line)
         line = re.sub(r"^\d+[\.\)]\s*", "", line)
         line = line.strip().strip('"').strip("'").strip()
-        if not line or len(line) > 28:
+        if not line or len(line) > 40:
             continue  # 빈 줄과 비정상적으로 긴 줄(문장 누출)은 버튼으로 안 만든다.
-        if line.endswith((".", "다", "요")) and len(line) > 20:
+        if line.endswith((".", "다", "요")) and len(line) > 28:
             continue  # 명령형 짧은 문구가 아니라 서술 문장이 새면 버튼으로 안 만든다.
         labels.append(line)
         if len(labels) >= 4:
@@ -182,10 +198,13 @@ if st.sidebar.button("랜덤 페르소나"):
 # 랜덤으로 뽑힌 id가 현재 필터 후보에 있으면 기본 선택으로 쓴다.
 rand_pid = st.session_state.get("_rand_pid")
 default_idx = ids.index(rand_pid) if rand_pid in ids else 0
+# _rand_pid를 사용한 뒤 즉시 제거해 비자 필터 변경 시 기본값이 튀지 않게 한다.
+st.session_state.pop("_rand_pid", None)
 persona_id = st.sidebar.selectbox(
     "페르소나",
     options=ids,
     index=default_idx,
+    key="persona_selectbox",
     format_func=lambda k: f"[{PERS[k]['flag']}] {PERS[k]['name']} ({PERS[k]['visa']} {PERS[k]['role']})",
 )
 
@@ -330,7 +349,23 @@ def start_action_labels(persona_id: str, reply_lang: str, limit: int = 3) -> lis
     return out
 
 
-def render_actions(labels: list[str], reply_lang: str, msg_key: str, header: bool = True):
+# 종결 안내 문구. 대화가 자연스럽게 끝났을 때 떠야 할 안내.
+_DONE_CAPTION = {
+    "ko": "필요한 점검을 모두 마쳤습니다. 다른 궁금한 점이 있으면 말씀해 주세요.",
+    "en": "All checks are complete. Let me know if you have other questions.",
+    "vi": "Đã hoàn tất mọi kiểm tra. Nếu bạn còn câu hỏi, hãy cho tôi biết.",
+    "ne": "सबै जाँच सकियो। अरू प्रश्न भए सोध्नुहोस्।",
+}
+
+
+def render_actions(
+    labels: list[str],
+    reply_lang: str,
+    msg_key: str,
+    header: bool = True,
+    is_start: bool = False,
+    body_text: str = "",
+):
     """답변 아래에 '다음 행동' 선택지 버튼을 그린다. 능동성을 눈에 보이게 만드는 핵심 UI.
 
     labels: 버튼에 그대로 들어갈 문구 리스트.
@@ -339,10 +374,15 @@ def render_actions(labels: list[str], reply_lang: str, msg_key: str, header: boo
     reply_lang: 헤더 caption 언어.
     msg_key: 버튼 위젯 key 충돌 방지용 접두어.
     header: NEXT_HEADER caption을 직접 그릴지. 첫 화면은 호출부가 START_HEADER를 따로 그리므로 False.
+    is_start: True면 첫 화면(대화 시작 전). 종결 안내를 띄우지 않는다.
+    body_text: 본문 텍스트. 종결 의도 판별에 쓴다.
 
     버튼이 눌리면 그 문구 자체를 사용자 의도로 session_state['pending_intent']에 담고 rerun한다.
     문구를 그대로 LLM에 보내므로 에이전트가 그 요청을 보고 tool을 스스로 골라 처리한다."""
     if not labels:
+        # 첫 화면이 아니고 종결 의도가 있으면 안내 caption을 띄운다.
+        if not is_start:
+            st.caption(_DONE_CAPTION.get(reply_lang, _DONE_CAPTION["ko"]))
         return
     if header:
         st.caption(NEXT_HEADER.get(reply_lang, NEXT_HEADER["ko"]))
@@ -358,6 +398,60 @@ def render_actions(labels: list[str], reply_lang: str, msg_key: str, header: boo
             st.rerun()
 
 
+def _build_history(max_turns: int = 3) -> list[dict]:
+    """session_state["messages"]에서 직전 최대 max_turns 턴을 [{role, content}] 형태로 변환한다.
+
+    LLM 멀티턴 메모리용. user_display/user_action은 role="user"로, assistant_display의 text는
+    role="assistant"로 매핑한다. tool_result 블록은 토큰 비용 때문에 제외한다.
+    현재 발화는 호출부에서 user_text로 별도 전달하므로 여기에 포함하지 않는다."""
+    messages = st.session_state.get("messages", [])
+    # assistant_display 기준으로 완성된 턴을 뒤에서 max_turns개 자른다.
+    # 하나의 "턴" = 직전 user 메시지 1개 + assistant 메시지 1개 쌍.
+    pairs: list[tuple[str, str]] = []
+    i = len(messages) - 1
+    while i >= 0 and len(pairs) < max_turns:
+        m = messages[i]
+        if m["role"] == "assistant_display":
+            # assistant 메시지를 찾았으면 직전 user 메시지를 탐색한다.
+            asst_text = m.get("text", "")
+            j = i - 1
+            while j >= 0 and messages[j]["role"] not in ("user_display", "user_action"):
+                j -= 1
+            if j >= 0:
+                user_text = messages[j].get("text", "")
+                pairs.append((user_text, asst_text))
+                i = j - 1
+            else:
+                break
+        else:
+            i -= 1
+    # 오래된 것이 앞에 오게 역전한다.
+    pairs.reverse()
+    history: list[dict] = []
+    for u, a in pairs:
+        history.append({"role": "user", "content": u})
+        history.append({"role": "assistant", "content": a})
+    return history
+
+
+def _korean_error_msg(e: Exception) -> str:
+    """예외를 종류별 한국어 안내 문구로 변환한다."""
+    try:
+        import anthropic as _ant
+        if isinstance(e, _ant.RateLimitError):
+            return "지금 요청이 몰려 잠시 후 다시 시도해 주세요."
+        if isinstance(e, (_ant.APITimeoutError, _ant.APIConnectionError)):
+            return "응답이 지연됩니다. 잠시 후 다시 시도해 주세요."
+    except ImportError:
+        pass
+    msg = str(e)
+    if "API 키" in msg or "ANTHROPIC_API_KEY" in msg or "GEMINI_API_KEY" in msg or "key" in msg.lower():
+        return "API 키 설정이 필요합니다. 사이드바에서 키를 입력해 주세요."
+    if "RuntimeError" in type(e).__name__ and "키" in msg:
+        return "API 키 설정이 필요합니다. 사이드바에서 키를 입력해 주세요."
+    return "일시적인 오류가 발생했습니다. 다시 시도해 주세요."
+
+
 def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_action: bool):
     """사용자 발화 1건을 에이전트에 보내고 답변과 처리 과정을 messages에 남긴다.
     일반 질문과 선택지 버튼이 같은 경로를 쓰게 하는 공통 함수.
@@ -371,6 +465,9 @@ def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_acti
     그래서 답변에서 던진 제안과 화면 버튼이 항상 일치한다."""
     role = "user_action" if is_action else "user_display"
     st.session_state["messages"].append({"role": role, "text": display_user})
+
+    # 멀티턴 메모리: 직전 최대 3턴을 히스토리로 넘겨 LLM이 문맥을 기억하게 한다.
+    prior_history = _build_history(max_turns=3)
 
     # 답변 언어를 user 메시지에 직접 박는다(시스템 프롬프트만으론 입력 언어에 끌려가므로).
     lang_directive = LANGUAGES[reply_lang]["instruct"]
@@ -388,25 +485,50 @@ def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_acti
             })
 
     system = build_system_prompt(reply_lang, persona_id)
+    error_occurred = False
     if PROVIDER == "claude":
         text = ""
         try:
-            for chunk in run_chat_stream(user_text, system, run_tool, on_step=on_step):
+            for chunk in run_chat_stream(
+                user_text, system, run_tool, on_step=on_step, history=prior_history
+            ):
                 if chunk:
                     text += chunk
             text = strip_emoji(text)
         except Exception as e:
-            text = f"오류: {e}"
+            print(repr(e), file=sys.stderr)
+            error_occurred = True
+            text = _korean_error_msg(e)
     else:
         try:
-            text = run_chat(user_text, system, run_tool, on_step=on_step)
+            text = run_chat(
+                user_text, system, run_tool, on_step=on_step, history=prior_history
+            )
         except Exception as e:
-            text = f"오류: {e}"
+            print(repr(e), file=sys.stderr)
+            error_occurred = True
+            text = _korean_error_msg(e)
+
+    # 오류로 끝난 turn은 messages에 저장하지 않는다(영문 예외가 영구 박제되지 않게).
+    if error_occurred:
+        st.error(text)
+        # 직전에 push했던 user 메시지도 제거해 대화 흐름을 정갈하게 유지한다.
+        if st.session_state["messages"] and st.session_state["messages"][-1]["role"] == role:
+            st.session_state["messages"].pop()
+        return
 
     used = [s["name"] for s in steps if "name" in s]
     # LLM이 답변 끝에 붙인 후속 선택지(<<NEXT>>)를 본문과 분리한다.
     # 본문만 화면에 보이고, 라벨은 다음 행동 버튼이 된다(답변과 일치 보장).
     body, next_labels = split_answer_and_actions(text)
+
+    # next_labels가 비고 종결 의도가 없으면 start_action_labels에서 폴백 1~2개를 채운다.
+    _DONE_WORDS = ("마쳤습니다", "완료", "모두 확인", "도움이 됐", "다른 궁금")
+    is_closing = any(w in body for w in _DONE_WORDS)
+    if not next_labels and not is_closing:
+        fallback = start_action_labels(persona_id, reply_lang, limit=2)
+        next_labels = fallback[:2]
+
     st.session_state["messages"].append({
         "role": "assistant_display", "text": body, "steps": steps,
         "lang": reply_lang, "used_tools": used, "persona_id": persona_id,
@@ -414,22 +536,39 @@ def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_acti
     })
 
 
-# 능동 모드
+# 능동 모드 — 실행 후 결과를 session_state에 저장해 rerun 후에도 재렌더된다(P2-2).
 if st.session_state.get("run_active"):
-    st.subheader("능동 점검 결과")
-    st.caption(f"{PERS[persona_id]['name']}님 기준일 {TODAY}")
+    st.session_state["run_active"] = False
+    p_name = PERS[persona_id]["name"]
     plan = active_plan(persona_id)
-    # 한 tool이 실패해도 나머지는 계속 표시한다.
+    collected: list[dict] = []  # {tname, card, summary, error}
     for tname, targs in plan:
         try:
             out = run_tool(tname, targs)
-            if out.get("card"):
-                render_card(out["card"])
-            else:
-                st.info(out["summary"])
+            collected.append({"tname": tname, "card": out.get("card"), "summary": out.get("summary", "")})
         except Exception as e:
-            st.warning(f"{TOOL_LABELS.get(tname, tname)} 처리 중 오류: {e}")
-    st.session_state["run_active"] = False
+            collected.append({"tname": tname, "card": None, "summary": "", "error": str(e)})
+    # 결과를 assistant_display 메시지로 대화 흐름에 흡수한다. rerun 후에도 재생 루프가 표시한다.
+    summary_lines = []
+    for item in collected:
+        label = TOOL_LABELS.get(item["tname"], item["tname"])
+        if item.get("error"):
+            summary_lines.append(f"{label}: 오류 — {item['error']}")
+        elif item["card"]:
+            summary_lines.append(f"{label}: {item['card'].get('head', '')} — {item['card'].get('metric', '')}")
+        else:
+            summary_lines.append(f"{label}: {item['summary']}")
+    summary_text = f"{p_name}님 능동 점검 결과 (기준일 {TODAY})\n\n" + "\n".join(summary_lines)
+    st.session_state["messages"].append({
+        "role": "assistant_display",
+        "text": summary_text,
+        "steps": [],
+        "lang": "ko",
+        "used_tools": [c["tname"] for c in collected],
+        "persona_id": persona_id,
+        "next_labels": [],
+        "active_cards": collected,  # 카드 재렌더용 리스트
+    })
     st.divider()
 
 # 대화 모드
@@ -472,7 +611,15 @@ for idx, m in enumerate(st.session_state["messages"]):
                     for i, s in enumerate(m["steps"], 1):
                         render_step(i, s["name"], s["args"], s["output"])
             st.write(m["text"])
-            # 선택지로 처리된 결과 메시지면 카드도 복원한다.
+            # 능동 점검 결과 카드들을 순회 렌더한다(rerun 후에도 재생 루프가 재현).
+            for item in m.get("active_cards", []):
+                if item.get("card"):
+                    render_card(item["card"])
+                elif item.get("error"):
+                    st.warning(f"{TOOL_LABELS.get(item['tname'], item['tname'])} 처리 중 오류: {item['error']}")
+                else:
+                    st.info(item.get("summary", ""))
+            # 개별 카드 복원(단일 card 키 하위 호환).
             if m.get("card"):
                 render_card(m["card"])
             # 마지막 assistant 메시지에만 '다음 행동' 선택지 버튼을 붙인다.
@@ -493,7 +640,7 @@ if not st.session_state["messages"]:
     render_persona_card(PERS[persona_id])
     st.caption(START_HEADER.get(start_lang, START_HEADER["ko"]))
     labels = start_action_labels(persona_id, start_lang)  # 첫 화면 정적 라벨
-    render_actions(labels, start_lang, msg_key="start", header=False)
+    render_actions(labels, start_lang, msg_key="start", header=False, is_start=True)
 
 prompt = st.chat_input("질문을 입력하세요")
 if prompt:
@@ -511,6 +658,12 @@ if prompt:
     user_text = f"[페르소나: {persona_id}] [답변 언어 강제: {lang_directive}] {prompt}"
     steps = []  # 처리 과정 수집용
 
+    # 멀티턴 메모리: 직전 최대 3턴을 히스토리로 넘겨 LLM이 문맥을 기억하게 한다.
+    # user_display 메시지를 방금 push했으므로 _build_history는 그 직전까지를 반환한다.
+    # (현재 user 메시지는 user_text로 별도 전달해 중복을 막는다)
+    prior_history = _build_history(max_turns=3)
+    # 방금 push한 user_display가 아직 assistant 짝이 없으므로 히스토리에서 빠진다(정상).
+
     def on_step(kind, payload):
         if kind == "tool_call":
             steps.append(payload)
@@ -522,6 +675,7 @@ if prompt:
                 "output": {"error": payload["error"], "summary": f"{payload['name']} 오류"},
             })
 
+    error_occurred_chat = False
     with st.chat_message("assistant"):
         proc_box = st.container()  # 처리 과정을 답변 위에 둔다
 
@@ -544,7 +698,11 @@ if prompt:
             try:
                 with st.spinner("에이전트가 처리 중..."):
                     for chunk in run_chat_stream(
-                        user_text, build_system_prompt(reply_lang, persona_id), run_tool, on_step=on_step
+                        user_text,
+                        build_system_prompt(reply_lang, persona_id),
+                        run_tool,
+                        on_step=on_step,
+                        history=prior_history,
                     ):
                         if not chunk:
                             continue
@@ -559,21 +717,51 @@ if prompt:
                 text = strip_emoji(text)
                 answer_box.markdown(split_answer_and_actions(text)[0])
             except Exception as e:
-                text = f"오류: {e}"
-                answer_box.markdown(text)
+                print(repr(e), file=sys.stderr)
+                error_occurred_chat = True
+                err_msg = _korean_error_msg(e)
+                # 누적 텍스트가 있으면 부분 답변을 살리고 중단 안내를 붙인다.
+                if text.strip():
+                    text = strip_emoji(text) + "\n\n(응답이 일시 중단되었습니다)"
+                else:
+                    text = err_msg
+                answer_box.markdown(split_answer_and_actions(text)[0])
         else:
             with st.spinner("에이전트가 처리 중..."):
                 try:
-                    text = run_chat(user_text, build_system_prompt(reply_lang, persona_id), run_tool, on_step=on_step)
+                    text = run_chat(
+                        user_text,
+                        build_system_prompt(reply_lang, persona_id),
+                        run_tool,
+                        on_step=on_step,
+                        history=prior_history,
+                    )
                 except Exception as e:
-                    text = f"오류: {e}"
+                    print(repr(e), file=sys.stderr)
+                    error_occurred_chat = True
+                    text = _korean_error_msg(e)
             render_steps_panel()
             st.write(split_answer_and_actions(text)[0])
+
+    # 오류로 끝난 turn은 messages에 저장하지 않는다(영문 예외가 영구 박제되지 않게).
+    if error_occurred_chat:
+        # 방금 push한 user_display를 제거해 대화 흐름을 정갈하게 유지한다.
+        if st.session_state["messages"] and st.session_state["messages"][-1]["role"] == "user_display":
+            st.session_state["messages"].pop()
+        st.rerun()
 
     # 이번 답변에서 실제로 실행된 tool 이름을 모은다.
     used_tools = [s["name"] for s in steps if "name" in s]
     # LLM이 답변 끝에 붙인 후속 선택지(<<NEXT>>)를 본문과 분리해 저장한다.
     body, next_labels = split_answer_and_actions(text)
+
+    # next_labels가 비고 종결 의도가 없으면 start_action_labels에서 폴백 1~2개를 채운다.
+    _DONE_WORDS_CHAT = ("마쳤습니다", "완료", "모두 확인", "도움이 됐", "다른 궁금")
+    is_closing_chat = any(w in body for w in _DONE_WORDS_CHAT)
+    if not next_labels and not is_closing_chat:
+        fallback_chat = start_action_labels(persona_id, reply_lang, limit=2)
+        next_labels = fallback_chat[:2]
+
     st.session_state["messages"].append(
         {
             "role": "assistant_display", "text": body, "steps": steps,

@@ -17,7 +17,7 @@ PERSONAS = {
         "exit_plan": "2027-01",
         "monthly_wage_krw": 2_700_000,
         "monthly_remit_krw": 1_000_000,
-        "pension_months": 58,
+        "pension_months": 54,
         "social_security_treaty": False,  # 베트남 미체결 → 반환일시금 수령 가능
         "deposit_balance_krw": 0,
         "summary": "베트남 E-9 근로자. 출국 1년 전. 반환일시금과 출국만기보험 수령 대상.",
@@ -114,9 +114,14 @@ def _make_one(rng: random.Random, seq: int) -> dict:
 
     # 출국 예정일을 데모 기준일 + 3~36개월 미래에서 뽑는다. 그 뒤 비자 체류상한을
     # 빼서 입국일을 역산한다. 이러면 모든 페르소나가 출국 D-day 양수로 뜬다.
+    # 역산한 입국일이 데모 기준일 이후(미래)가 될 수 있으므로 기준일 전월로 클램프한다.
     exit_offset = rng.randint(3, 36)
     ey, em = _add_months(DEMO_TODAY[0], DEMO_TODAY[1], exit_offset)
     entry_y, entry_m = _add_months(ey, em, -VISA_MAX_STAY_MONTHS[visa])
+    # 클램프: 입국일이 기준일 이후이면 기준일 한 달 전으로 당긴다.
+    clamp_y, clamp_m = _add_months(DEMO_TODAY[0], DEMO_TODAY[1], -1)
+    if (entry_y, entry_m) >= (DEMO_TODAY[0], DEMO_TODAY[1]):
+        entry_y, entry_m = clamp_y, clamp_m
     entry_date = f"{entry_y:04d}-{entry_m:02d}"
     exit_plan = f"{ey:04d}-{em:02d}"
 
@@ -124,7 +129,7 @@ def _make_one(rng: random.Random, seq: int) -> dict:
     wage = _round_man(rng.randint(2_300_000, 3_600_000)) if works else 0
     remit = _round_man(int(wage * rng.uniform(0.3, 0.7))) if wage else 0
     pension = min(rng.randint(12, 60), 60) if visa == "E-9" else (rng.randint(0, 24) if visa == "F-2" else 0)
-    deposit = rng.randint(15_000_000, 40_000_000) if visa in ("D-2", "D-10", "F-2") else 0
+    deposit = _round_man(rng.randint(15_000_000, 40_000_000)) if visa in ("D-2", "D-10", "F-2") else 0
     pid = f"{visa.lower().replace('-', '')}_{flag.lower()}_{seq:03d}"
     summary = f"{country} {visa} {role}. 입국 {entry_date}. " + (
         "반환일시금과 출국만기보험 대상." if visa == "E-9" else

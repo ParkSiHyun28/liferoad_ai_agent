@@ -17,7 +17,7 @@ def collateral_calc(persona_id: str) -> dict:
     커버 자산종: 예금, 대출."""
     p = get_persona(persona_id)
     deposit = p["deposit_balance_krw"]
-    limit = int(deposit * data.COLLATERAL_LOAN_RATIO)
+    limit = int(round(deposit * data.COLLATERAL_LOAN_RATIO / 10_000) * 10_000)
     numbers = {
         "deposit_krw": deposit,
         "loan_ratio": data.COLLATERAL_LOAN_RATIO,
@@ -33,7 +33,7 @@ def collateral_calc(persona_id: str) -> dict:
     return {
         "summary": f"잔고 {_won(deposit)}을 유지하면서 예금담보대출로 {_won(limit)}까지 활용할 수 있습니다.",
         "detail": (
-            f"D-2 비자는 잔고증명 예치금 {_won(deposit)} 유지가 요건입니다. "
+            f"잔고증명 예치금 {_won(deposit)} 유지가 비자 체류 요건입니다. "
             f"직접 인출하면 비자 요건을 위반합니다. 대신 예금담보대출(한도 {int(data.COLLATERAL_LOAN_RATIO*100)}%)로 "
             f"{_won(limit)}까지 생활비를 마련하면 잔고 요건 위반 없이 안전합니다."
         ),
@@ -142,6 +142,7 @@ def credit_builder(persona_id: str, months_accrued: int = 0) -> dict:
     """월세와 통신비와 공과금을 대안신용 데이터로 축적한다. 축적 개월 기준 프로필 형성도를 추정한다.
     커버 자산종: 신용."""
     p = get_persona(persona_id)
+    months_accrued = max(0, months_accrued)
     started = months_accrued >= data.CREDIT_PROFILE_MIN_MONTHS
     complete = months_accrued >= data.CREDIT_PROFILE_FULL_MONTHS
     numbers = {

@@ -50,8 +50,9 @@ def strip_emoji(text: str) -> str:
 # 로컬에서 ollama를 쓰려면 .env에 LLM_PROVIDER=ollama로 덮어쓴다.
 PROVIDER = os.environ.get("LLM_PROVIDER", "gemini").lower()
 
-# claude 경로 설정
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")
+# claude 경로 설정. 배포는 Secrets에서 claude로 오버라이드됨.
+# 기본값은 로컬 무키 환경 폴백용이므로 응답 속도가 빠른 haiku를 씀.
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5")
 
 # ollama 경로 설정. Ollama는 OpenAI 호환 엔드포인트를 제공한다.
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
@@ -148,7 +149,8 @@ def _run_claude(history: list[dict], system: str, run_tool) -> tuple[str, list[d
         history.append({"role": "user", "content": results})
     # 상한 도달. 무한 루프 대신 안내 텍스트로 종료한다.
     return (
-        "요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요.",
+        "요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요."
+        "\n\n<<NEXT>>\n질문 다시 정리하기\n마감 기한 확인하기",
         history,
     )
 
@@ -194,7 +196,7 @@ def _stream_claude(history: list[dict], system: str, run_tool):
                     "content": json.dumps(out, ensure_ascii=False),
                 })
         history.append({"role": "user", "content": results})
-    yield "\n\n요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요."
+    yield "\n\n요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요.\n\n<<NEXT>>\n질문 다시 정리하기\n마감 기한 확인하기"
 
 
 # --- OpenAI 호환 경로 (ollama / gemini / groq 공용) ---
@@ -283,12 +285,13 @@ def _run_openai_compat(cfg: dict, history: list[dict], system: str, run_tool) ->
             })
     # 상한 도달. 무한 루프 대신 안내 텍스트로 종료한다.
     return (
-        "요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요.",
+        "요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요."
+        "\n\n<<NEXT>>\n질문 다시 정리하기\n마감 기한 확인하기",
         messages,
     )
 
 
-def run_chat(user_text: str, system: str, run_tool, on_step=None) -> str:
+def run_chat(user_text: str, system: str, run_tool, on_step=None, history=None) -> str:
     """공급자 무관 진입점. 사용자 발화 1개를 받아 최종 텍스트를 반환한다.
 
     user_text: 페르소나 태그가 붙은 사용자 질문.
@@ -296,6 +299,9 @@ def run_chat(user_text: str, system: str, run_tool, on_step=None) -> str:
     run_tool: (name, args) -> dict. app.py가 넘기는 tool 실행 함수.
     on_step: 선택. 처리 단계를 보고받는 콜백. on_step(kind, payload) 형태로 호출된다.
              kind="tool_call"이면 payload={name, args, output}. 시각화 패널이 이걸 받는다.
+    history: 선택. 직전 대화 턴 [{role, content}] 리스트. 멀티턴 메모리용(하위 호환).
+             텍스트 user/assistant 메시지만 포함한다(tool_result 블록 제외).
+             현재 발화(user_text)는 여기에 포함하지 않는다(함수 내부에서 추가됨).
     """
     # run_tool을 감싸 호출 단계를 on_step으로 흘린다. 실제 동작과 100% 일치한다.
     # tool 실행 실패 시 앱이 죽지 않도록 예외를 잡아 안전한 dict를 반환한다.
@@ -316,17 +322,21 @@ def run_chat(user_text: str, system: str, run_tool, on_step=None) -> str:
                 "card": None,
             }
 
+    # 멀티턴 메모리: 이전 대화 턴이 있으면 앞에 붙이고 현재 발화를 마지막에 추가한다.
+    prior = list(history) if history else []
+    cur_msg = {"role": "user", "content": user_text}
+
     if PROVIDER == "claude":
-        history = [{"role": "user", "content": user_text}]
-        text, _ = _run_claude(history, system, traced_run_tool)
+        msgs = prior + [cur_msg]
+        text, _ = _run_claude(msgs, system, traced_run_tool)
         return strip_emoji(text)
     cfg = _OPENAI_COMPAT.get(PROVIDER)
     if cfg is None:
         raise RuntimeError(
             f"알 수 없는 LLM_PROVIDER={PROVIDER}. 가능: claude, ollama, gemini, groq."
         )
-    history = [{"role": "user", "content": user_text}]
-    text, _ = _run_openai_compat(cfg, history, system, traced_run_tool)
+    msgs = prior + [cur_msg]
+    text, _ = _run_openai_compat(cfg, msgs, system, traced_run_tool)
     return strip_emoji(text)
 
 
@@ -409,17 +419,21 @@ def _stream_openai_compat(cfg: dict, history: list[dict], system: str, run_tool)
                 "tool_call_id": slot["id"],
                 "content": json.dumps(out, ensure_ascii=False),
             })
-    yield "\n\n요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요."
+    yield "\n\n요청을 처리하는 데 단계가 너무 많이 필요합니다. 질문을 더 구체적으로 나눠 다시 물어봐 주세요.\n\n<<NEXT>>\n질문 다시 정리하기\n마감 기한 확인하기"
 
 
-def run_chat_stream(user_text: str, system: str, run_tool, on_step=None):
+def run_chat_stream(user_text: str, system: str, run_tool, on_step=None, history=None):
     """스트리밍 진입점. 최종 답변을 토큰 단위로 yield하는 제너레이터를 반환한다.
 
-    claude는 스트리밍 변형을 따로 두지 않고 run_chat 결과를 한 번에 yield해 폴백한다.
-    OpenAI 호환 공급자(gemini/groq/ollama)는 토큰 단위로 흐른다.
+    claude는 네이티브 토큰 스트리밍(_stream_claude)으로 글자가 흐른다.
+    OpenAI 호환 공급자(gemini/groq/ollama)는 _stream_openai_compat으로 흐른다.
     tool 호출 단계는 on_step으로 즉시 보고된다(run_chat과 동일 계약).
     이모지와 한자 누출은 스트림 토큰 단위로는 깨끗이 못 지우므로, app 쪽에서 최종 누적 텍스트에
-    strip_emoji를 한 번 더 적용하도록 한다. 여기서는 토큰을 가공 없이 흘린다."""
+    strip_emoji를 한 번 더 적용하도록 한다. 여기서는 토큰을 가공 없이 흘린다.
+    history: 선택. 직전 대화 턴 [{role, content}] 리스트. 멀티턴 메모리용(하위 호환).
+             텍스트 user/assistant 메시지만 포함한다(tool_result 블록 제외).
+             현재 발화(user_text)는 여기에 포함하지 않는다(함수 내부에서 추가됨).
+    """
     def traced_run_tool(name, args):
         try:
             out = run_tool(name, args)
@@ -436,15 +450,19 @@ def run_chat_stream(user_text: str, system: str, run_tool, on_step=None):
                 "card": None,
             }
 
+    # 멀티턴 메모리: 이전 대화 턴이 있으면 앞에 붙이고 현재 발화를 마지막에 추가한다.
+    prior = list(history) if history else []
+    cur_msg = {"role": "user", "content": user_text}
+
     if PROVIDER == "claude":
         # Claude는 네이티브 토큰 스트리밍을 쓴다.
-        history = [{"role": "user", "content": user_text}]
-        yield from _stream_claude(history, system, traced_run_tool)
+        msgs = prior + [cur_msg]
+        yield from _stream_claude(msgs, system, traced_run_tool)
         return
     cfg = _OPENAI_COMPAT.get(PROVIDER)
     if cfg is None:
         raise RuntimeError(
             f"알 수 없는 LLM_PROVIDER={PROVIDER}. 가능: claude, ollama, gemini, groq."
         )
-    history = [{"role": "user", "content": user_text}]
-    yield from _stream_openai_compat(cfg, history, system, traced_run_tool)
+    msgs = prior + [cur_msg]
+    yield from _stream_openai_compat(cfg, msgs, system, traced_run_tool)

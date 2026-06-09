@@ -79,8 +79,10 @@ def compliance_reason(persona_id: str, check_type: str = "jeonse_fraud") -> dict
 
     if check_type == "jeonse_fraud":
         risk_count = len(data.JEONSE_FRAUD_INDICATORS)
-        # E-9 근로자만 전세계약 대상 (D-2 유학생은 통상 기숙사나 고시원)
-        has_lease_risk = p["visa"] == "E-9"
+        # D-2(유학) 비자만 통상 기숙사/고시원 거주로 전세계약 해당 없음.
+        # E-9(근로자), F-2(거주) 등 임대차 계약 주체가 될 수 있는 비자는 위험 점검 대상.
+        _DORM_VISA = {"D-2"}
+        has_lease_risk = p["visa"] not in _DORM_VISA
 
         if not has_lease_risk:
             return {
@@ -184,6 +186,76 @@ def compliance_reason(persona_id: str, check_type: str = "jeonse_fraud") -> dict
                     "head": f"D-2: 주 {weekly_limit}시간 이내 근무 가능",
                     "body": f"주 {weekly_limit}시간 초과 시 불법. 방학 기간은 제한 없음.",
                     "metric": f"주 {weekly_limit}시간 제한",
+                },
+            }
+        elif visa == "F-2":
+            return {
+                "summary": f"{p['name']}님(F-2 거주비자)은 별도 허가 없이 자유롭게 취업 가능합니다.",
+                "detail": (
+                    "F-2 거주비자는 취업 활동에 별도 제한이 없습니다. "
+                    "업종과 사업장에 관계없이 자유로운 취업이 가능합니다. "
+                    "다만 비자 체류 기간 내에서만 취업 자격이 유효합니다."
+                ),
+                "numbers": {
+                    "check_type": check_type,
+                    "visa": visa,
+                    "weekly_limit_hours": weekly_limit,
+                    "work_restriction": "제한없음",
+                    "violation_risk": False,
+                },
+                "card": {
+                    "icon": "",
+                    "head": "F-2: 취업 제한 없음",
+                    "body": "업종과 사업장에 관계없이 자유로운 취업 가능. 체류 기간 내 자격 유효.",
+                    "metric": "취업 자유",
+                },
+            }
+        elif visa == "D-10":
+            return {
+                "summary": f"{p['name']}님(D-10 구직비자)은 구직 활동 중 제한적 취업 가능합니다.",
+                "detail": (
+                    "D-10 구직비자는 취업 활동이 원칙적으로 허용되지 않습니다. "
+                    "출입국 당국으로부터 시간제 취업 허가를 받은 경우에 한해 제한적으로 취업 가능합니다. "
+                    "허가 없이 취업하면 불법 취업으로 비자 취소 및 출국 조치 대상이 됩니다."
+                ),
+                "numbers": {
+                    "check_type": check_type,
+                    "visa": visa,
+                    "weekly_limit_hours": weekly_limit,
+                    "work_restriction": "허가_조건부",
+                    "violation_risk": True,
+                },
+                "card": {
+                    "icon": "",
+                    "head": "D-10: 허가 없는 취업 불가",
+                    "body": "출입국 당국 허가를 받은 경우에만 제한적 취업 가능. 무허가 취업 시 비자 취소.",
+                    "metric": "취업 허가 조건부",
+                },
+            }
+        else:
+            # 위에 명시되지 않은 비자 유형
+            return {
+                "summary": (
+                    f"{p['name']}님({visa})은 별도의 취업 가능 조건 확인이 필요합니다. "
+                    "출입국 당국 기준을 따릅니다."
+                ),
+                "detail": (
+                    f"해당 비자({visa})는 취업 조건이 비자 유형별로 다르게 적용됩니다. "
+                    "출입국관리법 및 출입국 당국의 최신 고시를 확인하거나 "
+                    "가까운 출입국 외국인청에 문의하시기 바랍니다."
+                ),
+                "numbers": {
+                    "check_type": check_type,
+                    "visa": visa,
+                    "weekly_limit_hours": weekly_limit,
+                    "work_restriction": "확인필요",
+                    "violation_risk": None,
+                },
+                "card": {
+                    "icon": "",
+                    "head": f"{visa}: 취업 조건 확인 필요",
+                    "body": "출입국 당국 기준에 따라 취업 가능 여부가 결정됩니다. 직접 문의 권장.",
+                    "metric": "개별 확인 필요",
                 },
             }
 

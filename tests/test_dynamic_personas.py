@@ -91,6 +91,18 @@ def test_exit_after_demo_today():
         assert ex > (2026, 10)
 
 
+def test_entry_before_demo_today():
+    """모든 동적 페르소나의 입국일이 데모 기준일(2026-10) 이전이다(미래 입국 방지)."""
+    # seed=42 (60명)와 다른 seed 몇 개로 함께 검증한다.
+    for seed, count in [(42, 60), (SEED, COUNT), (99, 60), (123, 60)]:
+        ps = make_random_personas(count, seed=seed)
+        for p in ps.values():
+            entry = tuple(map(int, p["entry_date"].split("-")))
+            assert entry < (2026, 10), (
+                f"seed={seed} {p['id']} 입국일 {p['entry_date']}이 기준일 이후입니다."
+            )
+
+
 def test_all_tools_no_exception_for_all_personas():
     """등록된 동적 페르소나 전원에 8개 tool을 호출해 예외가 없고 4키 규약을 지킨다."""
     ps = _make()
