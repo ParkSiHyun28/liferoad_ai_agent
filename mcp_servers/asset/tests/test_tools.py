@@ -21,10 +21,13 @@ def test_collateral_calc_minh_has_no_deposit():
 
 
 def test_pension_estimator_minh_treaty_false_can_receive():
+    from shared.personas import get_persona
     result = tools.pension_estimator(persona_id="minh")
-    # 베트남 미체결 → 수령 가능. 54개월 * 85,517 = 4,617,918 ≈ 462만
+    # 베트남 미체결 → 수령 가능. 반환일시금 = 납부월수 * 월환산액.
+    # 납부월수는 페르소나 데이터에서 읽어 데이터 변경에 안 깨지게 한다.
+    months = get_persona("minh")["pension_months"]
     assert result["numbers"]["can_receive"] is True
-    assert result["numbers"]["estimated_refund_krw"] == 54 * data.PENSION_MONTHLY_REFUND_KRW
+    assert result["numbers"]["estimated_refund_krw"] == months * data.PENSION_MONTHLY_REFUND_KRW
     assert result["card"] is not None
 
 

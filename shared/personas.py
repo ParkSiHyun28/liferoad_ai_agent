@@ -13,14 +13,14 @@ PERSONAS = {
         "country": "베트남",
         "visa": "E-9",
         "role": "근로자",
-        "entry_date": "2022-03",
+        "entry_date": "2022-08",
         "exit_plan": "2027-01",
         "monthly_wage_krw": 2_700_000,
         "monthly_remit_krw": 1_000_000,
-        "pension_months": 54,
+        "pension_months": 50,
         "social_security_treaty": False,  # 베트남 미체결 → 반환일시금 수령 가능
         "deposit_balance_krw": 0,
-        "summary": "베트남 E-9 근로자. 출국 1년 전. 반환일시금과 출국만기보험 수령 대상.",
+        "summary": "베트남 E-9 근로자. 출국 임박. 반환일시금과 출국만기보험 수령 대상.",
     },
     "suman": {
         "id": "suman",
@@ -30,7 +30,7 @@ PERSONAS = {
         "country": "네팔",
         "visa": "D-2",
         "role": "유학생",
-        "entry_date": "2023-03",
+        "entry_date": "2024-03",
         "exit_plan": "2027-02",
         "monthly_wage_krw": 0,
         "monthly_remit_krw": 0,
@@ -109,8 +109,15 @@ def _make_one(rng: random.Random, seq: int) -> dict:
     role = VISA_ROLE[visa]
     country, flag = rng.choice(_COUNTRY_POOL[visa])
     last, first, last_en, first_en = _NAME_POOL.get(flag, _NAME_FALLBACK)
-    name = rng.choice(last) + " " + rng.choice(first)
-    name_en = rng.choice(last_en.split("|")) + " " + rng.choice(first_en.split("|"))
+    last_en_list = last_en.split("|")
+    first_en_list = first_en.split("|")
+    # 한글 이름과 영문 이름은 같은 인덱스로 골라야 한 사람의 표기가 일치한다.
+    # 따로 추첨하면 "아민 하산"인데 영문이 "Karim Said"처럼 엇갈린다.
+    # 풀 길이가 다를 수 있으니 더 짧은 쪽 길이로 인덱스 범위를 맞춘다.
+    li = rng.randrange(min(len(last), len(last_en_list)))
+    fi = rng.randrange(min(len(first), len(first_en_list)))
+    name = last[li] + " " + first[fi]
+    name_en = last_en_list[li] + " " + first_en_list[fi]
 
     # 출국 예정일을 데모 기준일 + 3~36개월 미래에서 뽑는다. 그 뒤 비자 체류상한을
     # 빼서 입국일을 역산한다. 이러면 모든 페르소나가 출국 D-day 양수로 뜬다.
@@ -170,3 +177,70 @@ def all_personas() -> dict:
     merged = dict(PERSONAS)
     merged.update(_DYNAMIC_PERSONAS)
     return merged
+
+
+def visa_expiry_info(
+    persona_id_or_dict: str | dict,
+    today: tuple[int, int] = DEMO_TODAY,
+) -> dict:
+    """비자 만료 관련 정보를 계산해 반환한다.
+
+    반환 dict 키:
+      expiry        : str  — 'YYYY-MM'. 비자 만료 연월.
+      renewal_start : str  — 'YYYY-MM'. 갱신 신청 가능 시작 연월 (만료 4개월 전).
+      months_left   : int  — 오늘(today) 기준 만료까지 남은 개월수.
+                             양수=아직 남음. 0=이번 달 만료. 음수=이미 초과.
+      renewal_needed: bool — True면 출국 전에 갱신이 필요함.
+                             출국 예정일이 만료일보다 늦으면 True.
+      status        : str  — 'ok' | 'renewal_window' | 'expired' | 'no_renewal'.
+    """
+    # 페르소나 dict 가져오기
+    if isinstance(persona_id_or_dict, str):
+        p = get_persona(persona_id_or_dict)
+    else:
+        p = persona_id_or_dict
+
+    # 비자 코드 유효성 확인
+    visa = p["visa"]
+    if visa not in VISA_MAX_STAY_MONTHS:
+        raise ValueError(f"unsupported visa: {visa}")
+
+    # 입국일 파싱
+    entry_y, entry_m = (int(v) for v in p["entry_date"].split("-"))
+
+    # 비자 체류상한 읽기
+    max_months = VISA_MAX_STAY_MONTHS[visa]
+
+    # 만료일 계산
+    exp_y, exp_m = _add_months(entry_y, entry_m, max_months)
+
+    # 갱신 신청 가능 시작일 (만료 4개월 전)
+    ren_y, ren_m = _add_months(exp_y, exp_m, -4)
+
+    # 오늘 기준 만료까지 남은 개월수
+    months_left = (exp_y * 12 + exp_m - 1) - (today[0] * 12 + today[1] - 1)
+
+    # 출국 예정일 파싱
+    xp_y, xp_m = (int(v) for v in p["exit_plan"].split("-"))
+
+    # 갱신 필요 여부: 출국 예정일이 만료일보다 늦으면 갱신 필요
+    renewal_needed = (xp_y, xp_m) > (exp_y, exp_m)
+
+    # 상태 코드 결정
+    # 우선순위: renewal_needed == False이면 months_left에 관계없이 'no_renewal'
+    if not renewal_needed:
+        status = "no_renewal"
+    elif months_left < 0:
+        status = "expired"
+    elif months_left <= 4:
+        status = "renewal_window"
+    else:
+        status = "ok"
+
+    return {
+        "expiry": f"{exp_y:04d}-{exp_m:02d}",
+        "renewal_start": f"{ren_y:04d}-{ren_m:02d}",
+        "months_left": months_left,
+        "renewal_needed": renewal_needed,
+        "status": status,
+    }

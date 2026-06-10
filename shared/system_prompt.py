@@ -106,6 +106,12 @@ _BASE = """당신은 My LifeRoad입니다. 외국인의 한국 금융 생활을 
 - 이모지(이모티콘)를 절대 쓰지 않습니다. 텍스트로만 답합니다.
 - 핵심 결론을 먼저 말합니다.
 - 수치는 반드시 근거와 함께 제시합니다.
+- 금액 표기 규칙(반드시 지킵니다): 한국어 금액은 '만'과 '억' 단위로만 적습니다.
+  '백만', '천만', '29백만 원' 같은 영어식(million) 표기를 절대 쓰지 않습니다.
+  1억 이상은 반드시 '억'으로 끊습니다. 예: 2억 9,700만 원 (O) / 29,700만 원 (X) / 297백만 원 (X).
+  1억 미만은 '만 원'으로 적습니다. 예: 2,970만 원 / 290만 원.
+  raw 자릿수 나열(예: 29,700,000원)도 쓰지 않습니다. 같은 값은 '2,970만 원'으로 적습니다.
+  tool이 준 금액 문자열(예: '2,970만 원')은 그 형식 그대로 인용하고 다시 환산하지 않습니다.
 - 외국인이 이해하기 쉬운 평이한 문장을 씁니다. 전문용어는 풀어 설명합니다.
 - 마지막은 다음에 할 행동을 제안하며 마무리합니다.
 - 불리한 사실(연금 수령 불가 등)도 숨기지 않고 정직하게 안내합니다.
@@ -155,17 +161,38 @@ def _persona_block(persona_id: str | None) -> str:
     persona_id가 없거나 알 수 없으면 빈 문자열을 돌려줘 기존 톤을 유지한다."""
     if not persona_id:
         return ""
-    from shared.personas import get_persona  # 지연 import로 순환을 피한다
+    from shared.personas import get_persona, visa_expiry_info, DEMO_TODAY  # 지연 import로 순환을 피한다
     try:
         p = get_persona(persona_id)
     except ValueError:
         return ""
+
+    # 비자 만료 정보 계산
+    try:
+        vinfo = visa_expiry_info(p, today=DEMO_TODAY)
+        exp_str = vinfo["expiry"]
+        ren_str = vinfo["renewal_start"]
+        status = vinfo["status"]
+        if status == "ok":
+            visa_line = f"- 비자 만료 {exp_str}. 갱신 신청 가능 시작 {ren_str}.\n"
+        elif status == "renewal_window":
+            visa_line = f"- 비자 만료 {exp_str}. 갱신 신청 기간 중 (시작 {ren_str}).\n"
+        elif status == "expired":
+            visa_line = f"- 비자 만료 {exp_str} (이미 초과). 즉시 체류자격 점검 필요.\n"
+        else:  # no_renewal
+            visa_line = f"- 비자 만료 {exp_str}. 출국 예정({p['exit_plan']})이 만료 전이므로 갱신 불필요.\n"
+    except (ValueError, KeyError):
+        visa_line = ""
+
     return (
         "## 현재 사용자(페르소나)\n"
         f"- id {p['id']} / {p['name']} ({p['name_en']})\n"
         f"- {p['country']} 국적. {p['visa']} {p['role']}.\n"
         f"- 입국 {p['entry_date']}, 출국 예정 {p['exit_plan']}.\n"
+        + visa_line +
         f"- {p['summary']}\n"
+        f"- 호칭은 한국어 답변에서 항상 '{p['name']}'님으로 통일합니다. "
+        f"영문명 {p['name_en']}은 참고용이며 한국어 답변에서 호칭으로 쓰지 않습니다.\n"
     )
 
 

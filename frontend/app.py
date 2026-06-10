@@ -23,12 +23,11 @@ from shared.secrets_bridge import bridge_secrets
 
 bridge_secrets()
 
-import random
-
 from shared.system_prompt import build_system_prompt, LANGUAGES, detect_lang
 from shared.personas import (
     PERSONAS, get_persona, all_personas, make_random_personas, register_personas,
 )
+from frontend.sync_helper import is_embedded, sync_persona
 from shared.registry import TOOL_REGISTRY, ACTIVE_TOOLS
 from frontend.llm_provider import run_chat, run_chat_stream, strip_emoji, provider_label, PROVIDER
 
@@ -46,7 +45,158 @@ TOOL_LABELS = {
     "form_autofill": "신청서 자동작성",
 }
 
-st.set_page_config(page_title="My LifeRoad 자산", layout="wide")
+st.set_page_config(page_title="My LifeRoad", page_icon="🧭", layout="centered")
+
+# 전역 CSS: JB 딥네이비 다크 테마. 폰 화면에 꽉 차는 다크 UI.
+# 폰 프레임은 외부(아이폰 시뮬레이터/HTML 셸)가 그리므로 앱 본체는 순수 다크 화면만.
+st.markdown(
+    """<style>
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
+
+:root {
+  --lr-bg:       #FFFFFF;
+  --lr-surface:  #F4F6FA;
+  --lr-surface2: #EAEEF6;
+  --lr-line:     rgba(20,38,79,.10);
+  --lr-line-2:   rgba(20,38,79,.18);
+  --lr-ink:      #161B26;
+  --lr-ink-2:    #5A6275;
+  --lr-muted:    #8A91A0;
+  --lr-navy:     #14264F;
+  --lr-accent:   #14264F;
+  --lr-radius:   14px;
+}
+
+/* 전역: 폰트 + 다크 배경 꽉 채우기 (흰색 새는 것 차단) */
+html, body, .stApp,
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"],
+[data-testid="stMainBlockContainer"] {
+  background: var(--lr-bg) !important;
+  font-family: "Pretendard", -apple-system, BlinkMacSystemFont, system-ui, sans-serif !important;
+  color: var(--lr-ink);
+}
+
+/* 컨테이너 여백 — 폰 화면에 꽉 차게 */
+.block-container,
+[data-testid="stMainBlockContainer"] {
+  padding: 1.1rem 1rem 3.5rem !important;
+  max-width: 720px;
+}
+
+/* Streamlit 기본 크롬 제거 (헤더/툴바/푸터/메뉴/데코바) */
+[data-testid="stHeader"],
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+#MainMenu, footer { display: none !important; }
+[data-testid="stStatusWidget"] { display: none !important; }
+
+/* 타이포 */
+h1, h2, h3, h4 {
+  font-family: "Pretendard", sans-serif !important;
+  color: var(--lr-ink) !important;
+  letter-spacing: -.02em; font-weight: 700 !important;
+}
+h1 { font-size: 1.5rem !important; line-height: 1.2; }
+h2 { font-size: 1.2rem !important; }
+h3 { font-size: 1.02rem !important; }
+p, li, label, .stMarkdown, [data-testid="stMarkdownContainer"] { color: var(--lr-ink-2); line-height: 1.55; }
+
+/* 버튼 (한국어 어절 단위 줄바꿈 포함) */
+.stButton > button,
+[data-testid="stFormSubmitButton"] > button,
+div[data-testid="stButton"] > button {
+  font-family: "Pretendard", sans-serif !important;
+  background: var(--lr-accent) !important;
+  color: #FFFFFF !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  font-weight: 700 !important;
+  padding: .6rem 1.2rem !important;
+  word-break: keep-all;
+  overflow-wrap: break-word;
+  transition: filter .15s ease, transform .15s ease !important;
+}
+.stButton > button:hover { filter: brightness(1.08); transform: translateY(-1px); }
+.stButton > button:active { transform: translateY(0); }
+.stButton > button[kind="secondary"] {
+  background: var(--lr-surface) !important;
+  color: var(--lr-ink) !important;
+  border: 1px solid var(--lr-line-2) !important;
+}
+.stButton > button[kind="secondary"]:hover { background: var(--lr-surface2) !important; }
+
+/* 입력류 */
+.stTextInput input, .stTextArea textarea, .stNumberInput input,
+[data-baseweb="select"] > div, [data-baseweb="input"] > div {
+  border-radius: var(--lr-radius) !important;
+  border: 1px solid var(--lr-line-2) !important;
+  background: var(--lr-surface) !important;
+  color: var(--lr-ink) !important;
+  font-family: "Pretendard", sans-serif !important;
+}
+.stTextInput input::placeholder, .stTextArea textarea::placeholder { color: var(--lr-ink-2); opacity: .7; }
+.stTextInput input:focus, .stTextArea textarea:focus {
+  border-color: var(--lr-accent) !important;
+  box-shadow: 0 0 0 3px rgba(92,124,214,.22) !important;
+}
+label, [data-testid="stWidgetLabel"] p {
+  font-weight: 600 !important; color: var(--lr-ink) !important; font-size: .88rem !important;
+}
+
+/* 채팅 */
+[data-testid="stChatMessage"] {
+  background: var(--lr-surface);
+  border: 1px solid var(--lr-line);
+  border-radius: var(--lr-radius);
+  padding: .85rem 1rem; margin-bottom: .55rem;
+}
+[data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) { background: var(--lr-surface2); }
+[data-testid="stChatMessage"] p { color: var(--lr-ink) !important; }
+[data-testid="stChatInput"] {
+  border-radius: 999px !important; border: 1px solid var(--lr-line-2) !important;
+  background: var(--lr-surface) !important;
+}
+[data-testid="stChatInput"] textarea { font-family: "Pretendard", sans-serif !important; color: var(--lr-ink) !important; }
+
+/* 카드형 컨테이너 */
+[data-testid="stVerticalBlockBorderWrapper"] {
+  border-radius: 16px !important;
+  border: 1px solid var(--lr-line) !important;
+  background: var(--lr-surface);
+}
+
+/* 알림 */
+[data-testid="stAlert"] {
+  border-radius: var(--lr-radius) !important;
+  border: 1px solid var(--lr-line-2) !important;
+  background: var(--lr-surface) !important;
+  color: var(--lr-ink) !important;
+}
+
+/* 탭 */
+.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid var(--lr-line); }
+.stTabs [data-baseweb="tab"] { font-family: "Pretendard", sans-serif !important; font-weight: 600; color: var(--lr-ink-2); }
+.stTabs [aria-selected="true"] { color: var(--lr-ink) !important; }
+.stTabs [data-baseweb="tab-highlight"] { background: var(--lr-accent) !important; }
+
+/* 진행바 / 스피너 */
+.stProgress > div > div > div { background: var(--lr-accent) !important; }
+.stSpinner > div { border-top-color: var(--lr-accent) !important; }
+
+/* 사이드바 */
+[data-testid="stSidebar"] { background: var(--lr-surface) !important; border-right: 1px solid var(--lr-line); }
+
+/* 구분선 */
+hr { border-color: var(--lr-line) !important; }
+
+/* 스크롤바 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,.16); border-radius: 999px; }
+::-webkit-scrollbar-track { background: transparent; }
+</style>""",
+    unsafe_allow_html=True,
+)
 
 
 # LLM이 답변 끝에 붙이는 후속 선택지 마커. 이 줄 이후를 버튼 라벨로 파싱한다.
@@ -143,20 +293,27 @@ def render_card(card: dict):
     )
 
 
-def render_persona_card(p: dict):
-    """첫 화면에서 지금 상담 중인 사람이 누구인지 한눈에 보여주는 요약 카드.
-    비자와 체류 상황을 박아 '에이전트가 이 사람을 인식하고 있다'를 시각적으로 드러낸다."""
-    st.markdown(
-        "<div style='border:1px solid #5A4D26;border-left:4px solid #E7B85C;"
-        "border-radius:8px;padding:14px;background:#16223C;margin:6px 0'>"
-        f"<div style='font-size:17px;color:#F2E9D8'><b>[{p['flag']}] {p['name']}</b> "
-        f"<span style='color:#93A0B8;font-size:14px'>({p['name_en']})</span></div>"
-        f"<div style='color:#93A0B8;margin-top:6px'>{p['country']} / {p['visa']} {p['role']} / "
-        f"입국 {p['entry_date']} / 출국 예정 {p['exit_plan']}</div>"
-        f"<div style='color:#8FA3BE;margin-top:6px;font-size:14px'>{p['summary']}</div>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+def _stamp_intro_if_needed(persona_id: str, lang: str) -> None:
+    """messages가 비어 있고 ai_intro 캐시에 인트로가 있으면 intro_display로 박제한다.
+    이미 intro_display가 있으면 중복 박제하지 않는다."""
+    messages = st.session_state.get("messages", [])
+    # 이미 intro_display가 있으면 건너뜀
+    if any(m["role"] == "intro_display" for m in messages):
+        return
+    # messages가 비어 있어야 박제 대상
+    if messages:
+        return
+    cache_key = f"{persona_id}__{lang}"
+    cached = st.session_state.get("ai_intro", {})
+    if cache_key not in cached:
+        return
+    intro_body, intro_labels = cached[cache_key]
+    st.session_state["messages"].append({
+        "role": "intro_display",
+        "text": intro_body,
+        "labels": intro_labels,
+        "lang": lang,
+    })
 
 
 def render_step(idx: int, name: str, args: dict, output: dict):
@@ -195,35 +352,17 @@ if "personas_loaded" not in st.session_state:
     register_personas(make_random_personas(60, seed=42))
     st.session_state["personas_loaded"] = True
 
-# 고정 2명과 동적 페르소나를 합친 전체. 사이드바와 시연이 이 목록을 쓴다.
+# 고정 2명과 동적 페르소나를 합친 전체. 시연이 이 목록을 쓴다.
 PERS = all_personas()
 
-# 사이드바
-st.sidebar.title("My LifeRoad 자산")
-st.sidebar.caption("시연용 페르소나를 골라 그 사람 기준으로 에이전트가 어떻게 동작하는지 봅니다.")
-
-# 비자 필터로 후보를 좁힌다. 50~100명이라 라디오 대신 드롭다운을 쓴다.
-visa_opts = ["전체"] + sorted({p["visa"] for p in PERS.values()})
-vf = st.sidebar.selectbox("비자 필터", visa_opts)
-ids = sorted(k for k, p in PERS.items() if vf == "전체" or p["visa"] == vf)
-
-# 랜덤 페르소나 버튼. 다양한 사람을 빠르게 시연하려고 후보 중 하나를 무작위 선택한다.
-if st.sidebar.button("랜덤 페르소나"):
-    st.session_state["_rand_pid"] = random.choice(ids)
-    st.rerun()
-
-# 랜덤으로 뽑힌 id가 현재 필터 후보에 있으면 기본 선택으로 쓴다.
-rand_pid = st.session_state.get("_rand_pid")
-default_idx = ids.index(rand_pid) if rand_pid in ids else 0
-# _rand_pid를 사용한 뒤 즉시 제거해 비자 필터 변경 시 기본값이 튀지 않게 한다.
-st.session_state.pop("_rand_pid", None)
-persona_id = st.sidebar.selectbox(
-    "페르소나",
-    options=ids,
-    index=default_idx,
-    key="persona_selectbox",
-    format_func=lambda k: f"[{PERS[k]['flag']}] {PERS[k]['name']} ({PERS[k]['visa']} {PERS[k]['role']})",
-)
+# -------------------------------------------------------------------------
+# persona_id와 lang을 query_params에서 읽는다.
+# 폰 밖 HTML 셸이 ?embed=true&persona=ID&lang=LANG 형태로 iframe src를 갱신하면
+# 앱이 리로드되며 이 값을 읽어 페르소나와 언어를 결정한다.
+# -------------------------------------------------------------------------
+_qp_persona = st.query_params.get("persona", "minh")
+# query_params에 넘어온 id가 PERS 목록에 없으면 "minh"로 폴백한다.
+persona_id: str = _qp_persona if _qp_persona in PERS else "minh"
 
 # 페르소나가 바뀌면 대화 이력을 비운다. 다른 사람 상담이 시작되므로 선택지와 누적
 # 사용 이력도 새 사람 기준으로 초기화돼야 한다(엉뚱한 사람의 선택지가 남는 것 방지).
@@ -235,29 +374,18 @@ if st.session_state.get("_active_persona") != persona_id:
     st.session_state.pop("ai_intro", None)
     st.session_state["completed_tools"] = set()
 
-# 답변 언어. 기본은 '자동감지'다. 사용자가 입력한 질문의 언어를 감지해 같은 언어로 답한다.
-# 외국인이 모국어로 물으면 모국어로, 심사위원이 한국어로 물으면 한국어로 자연히 분기된다.
-# 특정 언어로 고정해 보고 싶으면 드롭다운에서 그 언어를 직접 골라 자동감지를 끈다(수동 오버라이드).
+# 답변 언어. 기본은 '자동감지'(auto)다.
+# ?lang=ko / ?lang=vi / ?lang=ne / ?lang=en 쿼리파라미터로 강제할 수 있다.
 lang_codes = ["auto"] + list(LANGUAGES.keys())
-LANG_LABELS = {"auto": "자동감지 (질문 언어 따라감)"}
-LANG_LABELS.update({c: LANGUAGES[c]["name"] for c in LANGUAGES})
-lang = st.sidebar.selectbox(
-    "답변 언어",
-    options=lang_codes,
-    index=lang_codes.index(st.session_state.get("lang", "auto")),
-    format_func=lambda c: LANG_LABELS[c],
-)
+_qp_lang = st.query_params.get("lang", "auto")
+lang: str = _qp_lang if _qp_lang in lang_codes else "auto"
 st.session_state["lang"] = lang
 
-st.sidebar.caption(f"모델: {provider_label()}")
-if PROVIDER == "claude" and not os.environ.get("ANTHROPIC_API_KEY"):
-    key_in = st.sidebar.text_input("ANTHROPIC_API_KEY", type="password")
-    if key_in:
-        os.environ["ANTHROPIC_API_KEY"] = key_in
-
-st.sidebar.divider()
-if st.sidebar.button("능동 점검 실행"):
-    st.session_state["run_active"] = True
+# 현재 페르소나를 데모 셸로 동기화한다(postMessage).
+# is_embedded()가 True일 때만(=?embed=true) 셸이 받을 수 있다.
+# 개발 환경에서도 오류 없이 동작하도록 항상 호출하되 셸이 없으면 무시된다.
+_current_p = PERS.get(persona_id, PERS["minh"])
+sync_persona(_current_p)
 
 def active_plan(persona_id: str) -> list[tuple[str, dict]]:
     """페르소나 속성으로 능동 점검 계획을 만든다. persona_id 하드코딩 없이
@@ -548,9 +676,9 @@ def _korean_error_msg(e: Exception) -> str:
         pass
     msg = str(e)
     if "API 키" in msg or "ANTHROPIC_API_KEY" in msg or "GEMINI_API_KEY" in msg or "key" in msg.lower():
-        return "API 키 설정이 필요합니다. 사이드바에서 키를 입력해 주세요."
+        return "API 키 설정이 필요합니다. 환경변수(ANTHROPIC_API_KEY)를 확인해 주세요."
     if "RuntimeError" in type(e).__name__ and "키" in msg:
-        return "API 키 설정이 필요합니다. 사이드바에서 키를 입력해 주세요."
+        return "API 키 설정이 필요합니다. 환경변수(ANTHROPIC_API_KEY)를 확인해 주세요."
     return "일시적인 오류가 발생했습니다. 다시 시도해 주세요."
 
 
@@ -692,6 +820,15 @@ if "completed_tools" not in st.session_state:
 # 버튼을 tool 직접 실행으로 처리하지 않는다. 그 의도를 자연어 문장으로 바꿔 LLM에 보낸다.
 # 에이전트가 상황을 보고 어떤 tool을 어떤 순서로 쓸지 스스로 판단한다(진짜 능동성).
 # 일반 질문 입력과 완전히 같은 경로(run_agent_turn)를 타므로 처리 과정 패널도 동일하게 뜬다.
+
+# pending_intent 처리 직전에 인트로 박제를 실행한다.
+# 첫 버튼 클릭 후 rerun 시 messages가 비어 있는 상태이므로 이 시점에 박제해야
+# 재생 루프가 인트로를 그릴 수 있다.
+_pending_lang = st.session_state.get("lang", "auto")
+_pending_start_lang = "ko" if _pending_lang == "auto" else _pending_lang
+if st.session_state.get("pending_intent"):
+    _stamp_intro_if_needed(persona_id, _pending_start_lang)
+
 pending = st.session_state.pop("pending_intent", None)
 if pending:
     with st.spinner("에이전트가 처리 중..."):
@@ -709,7 +846,12 @@ last_assistant_idx = max(
     default=-1,
 )
 for idx, m in enumerate(st.session_state["messages"]):
-    if m["role"] == "user_display":
+    if m["role"] == "intro_display":
+        # 박제된 AI 인트로. 버튼을 누른 뒤 재생 루프가 이것을 그린다.
+        with st.chat_message("assistant"):
+            st.markdown(m["text"])
+        # 버튼은 이미 사용된 상태이므로 다시 그리지 않는다.
+    elif m["role"] == "user_display":
         with st.chat_message("user"):
             st.write(m["text"])
     elif m["role"] == "user_action":
@@ -748,15 +890,14 @@ for idx, m in enumerate(st.session_state["messages"]):
                 )
 
 # 첫 화면 선제 선택지. 대화가 아직 비어 있을 때만 띄운다.
-# 페르소나를 인식한 요약 카드와 그 사람 상황에 맞는 행동 버튼을 먼저 보여준다.
-# 버튼을 누르면 일반 질문과 같은 경로(run_agent_turn)로 LLM이 상황을 판단해 처리한다.
-if not st.session_state["messages"]:
+# intro_display가 박제되면 messages가 비어 있지 않으므로 이 블록은 다시 실행되지 않는다.
+if not any(m["role"] == "intro_display" for m in st.session_state["messages"]):
     # 첫 화면 선제 선택지 언어. 기본은 한국어로 고정한다(심사 기본 언어).
     # 페르소나 모국어를 따라가면 영어/네팔어 버튼이 섞여 첫 화면이 들쭉날쭉했다.
     # 외국인 모국어 분기는 사용자가 질문을 입력하면 그때 자동감지로 자연히 일어난다.
-    # 단 사이드바에서 특정 언어를 명시적으로 고른 경우는 그 언어를 존중한다.
+    # 단 ?lang= 파라미터로 특정 언어를 명시적으로 지정한 경우는 그 언어를 존중한다.
     start_lang = "ko" if lang == "auto" else lang
-    render_persona_card(PERS[persona_id])
+
     # AI 추천 캐시 여부 확인. 캐시가 없으면 LLM을 1회 호출해 동적 추천을 생성한다.
     _cache_key = f"{persona_id}__{start_lang}"
     _has_cache = _cache_key in st.session_state.get("ai_intro", {})
@@ -766,6 +907,7 @@ if not st.session_state["messages"]:
     _plan_tools = {t for t, _ in active_plan(persona_id)}
     _all_done = bool(_plan_tools) and _plan_tools.issubset(_completed)
 
+    # 첫 화면: 가짜 폰 프레임 없이 앱 본체 그대로. 폰 프레임은 시연 시 외부(아이폰 시뮬레이터/HTML 셸)가 감싼다.
     if _all_done:
         st.info("현재 챙겨야 할 주요 작업을 모두 마쳤습니다. 다른 궁금한 점이 있으면 입력해 주세요.")
     else:
@@ -779,19 +921,25 @@ if not st.session_state["messages"]:
                 persona_id, start_lang, exclude_tools=_completed
             )
 
-        if intro_body:
+        # AI 인트로 메시지를 채팅 말풍선으로 표시
+        with st.chat_message("assistant"):
             st.markdown(intro_body)
-        st.caption(START_HEADER.get(start_lang, START_HEADER["ko"]))
+        # 선제 선택지 버튼 (폰 프레임 없이 바로)
         render_actions(intro_labels, start_lang, msg_key="start", header=False, is_start=True)
 
 prompt = st.chat_input("질문을 입력하세요")
 if prompt:
+    # 첫 화면 AI 인트로를 대화 맨 앞에 박제한다. 박제하지 않으면 인트로가 chat_input 위
+    # 별도 블록에서 매 패스 다시 그려져, 직접 입력한 질문/답변보다 아래로 밀린다(순서 역전).
+    # 버튼 클릭 경로(pending_intent)와 동일하게 여기서도 박제해 순서를 통일한다.
+    _chat_lang = "ko" if lang == "auto" else lang
+    _stamp_intro_if_needed(persona_id, _chat_lang)
     st.session_state["messages"].append({"role": "user_display", "text": prompt})
     with st.chat_message("user"):
         st.write(prompt)
 
-    # 응답 언어 확정. 사이드바가 '자동감지(auto)'면 질문 텍스트의 언어를 감지해 그 언어로 답한다.
-    # 사용자가 특정 언어를 골랐으면 그 언어로 강제한다(수동 오버라이드).
+    # 응답 언어 확정. ?lang=auto(기본)이면 질문 텍스트의 언어를 감지해 그 언어로 답한다.
+    # ?lang=ko 처럼 특정 언어를 지정했으면 그 언어로 강제한다(수동 오버라이드).
     reply_lang = detect_lang(prompt) if lang == "auto" else lang
 
     # 답변 언어를 user 메시지에 직접 박는다. 시스템 프롬프트의 언어 지시만으로는

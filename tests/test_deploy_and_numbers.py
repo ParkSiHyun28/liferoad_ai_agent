@@ -42,9 +42,12 @@ def test_claim_deadline_constant_exists():
 
 
 def test_pension_refund_value_stable():
-    """민 반환일시금은 약 4,617,918원으로 안정적이어야 한다(54개월 * 85,517원)."""
+    """민 반환일시금 = 납부월수 * 85,517원. 납부월수는 페르소나 데이터에서 읽어
+    데이터 변경(입국일/납부월수 조정)에도 계산식이 안정적인지 검증한다."""
+    from shared.personas import get_persona
+    months = get_persona("minh")["pension_months"]
     out = tools.pension_estimator("minh")
-    assert out["numbers"]["estimated_refund_krw"] == 85_517 * 54 == 4_617_918
+    assert out["numbers"]["estimated_refund_krw"] == 85_517 * months
 
 
 def test_pension_convert_rate_renders_22_4_percent():

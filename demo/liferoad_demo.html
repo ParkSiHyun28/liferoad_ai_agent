@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>LifeRoad AI Agent 시연</title>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css" />
+<style>
+  :root {
+    --navy:        #14264F;
+    --navy-soft:   #3A4E80;
+    --bg:          #F6F7F9;
+    --card:        #FFFFFF;
+    --ink:         #161B26;
+    --ink-2:       #515869;
+    --muted:       #8A91A0;
+    --line:        #E6E9EF;
+    --screen-bg:   #FFFFFF;
+    --font: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .stage {
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 24px 18px;
+  }
+
+  /* 좌(컨트롤+카드 세로 스택) 우(아이폰) 2단. 한 화면에 들어가 스크롤 없음. */
+  .layout {
+    width: 100%;
+    max-width: 1120px;
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 28px;
+    align-items: center;
+  }
+  .layout .left-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
+  }
+  .layout .right-col {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+  }
+
+  /* ---------- top brand bar ---------- */
+  .topbar {
+    width: 100%;
+    max-width: 1080px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .brand { display: flex; align-items: center; gap: 11px; }
+  .brand-mark {
+    width: 30px; height: 30px; border-radius: 8px;
+    background: var(--navy);
+    display: grid; place-items: center;
+    color: #fff; font-weight: 800; font-size: 14px; letter-spacing: -.02em;
+  }
+  .brand-name { font-weight: 700; font-size: 16px; letter-spacing: -.01em; color: var(--ink); }
+  .brand-name b { color: var(--navy); }
+  .brand-sub {
+    font-size: 12.5px; color: var(--muted); font-weight: 500;
+    padding-left: 11px; margin-left: 4px; border-left: 1px solid var(--line);
+  }
+  .sync-pill {
+    font-size: 12px; font-weight: 600; letter-spacing: .01em;
+    color: var(--muted);
+    background: #fff; border: 1px solid var(--line);
+    padding: 7px 13px; border-radius: 999px;
+    display: flex; align-items: center; gap: 8px;
+    transition: color .2s, border-color .2s;
+  }
+  .sync-pill .dot { width: 7px; height: 7px; border-radius: 50%; background: #C2C8D2; transition: background .2s; }
+  .sync-pill.live { color: #178A53; border-color: #BFE6CF; }
+  .sync-pill.live .dot { background: #19B36B; }
+
+  /* ---------- 컨트롤 영역 ---------- */
+  .controls {
+    width: 100%;
+    max-width: 1080px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  .ctrl-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 200px;
+  }
+  .ctrl-label {
+    font-size: 11px; font-weight: 700; letter-spacing: .04em;
+    color: var(--muted); text-transform: uppercase;
+  }
+  .ctrl-group select {
+    font-family: var(--font);
+    font-size: 14px; font-weight: 600; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 12px;
+    cursor: pointer; outline: none;
+    transition: border-color .15s;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238A91A0' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 36px;
+  }
+  .ctrl-group select:focus { border-color: var(--navy-soft); }
+  .ctrl-divider {
+    width: 1px; height: 40px; background: var(--line); flex-shrink: 0;
+  }
+  .ctrl-hint {
+    font-size: 12px; color: var(--muted); font-weight: 500; line-height: 1.5;
+    flex: 1; min-width: 200px;
+  }
+
+  /* ---------- persona card ---------- */
+  .persona {
+    width: 100%;
+    max-width: 1080px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+  .persona-top {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 18px 24px;
+  }
+  .avatar {
+    width: 52px; height: 52px; border-radius: 50%;
+    flex-shrink: 0;
+    background: #EEF1F6;
+    color: var(--navy);
+    display: grid; place-items: center;
+    font-size: 19px; font-weight: 700;
+    overflow: hidden;
+  }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .id-meta { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 180px; }
+  .id-name { font-size: 18px; font-weight: 700; color: var(--ink); letter-spacing: -.01em; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .id-name .en { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .id-code {
+    font-size: 11px; font-weight: 700; letter-spacing: .06em;
+    color: var(--navy); background: #EEF1F6;
+    padding: 2px 7px; border-radius: 5px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  /* fields: 6개로 늘어남 */
+  .fields {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    row-gap: 10px;
+  }
+  .field {
+    padding: 2px 20px;
+    display: flex; flex-direction: column; gap: 4px;
+    border-left: 1px solid var(--line);
+    min-width: 0;
+  }
+  .field .flabel {
+    font-size: 11px; font-weight: 600; letter-spacing: .03em;
+    color: var(--muted); text-transform: uppercase;
+  }
+  .field .fval {
+    font-size: 14.5px; font-weight: 600; color: var(--ink);
+    letter-spacing: -.01em; line-height: 1.3; overflow-wrap: anywhere;
+  }
+  .field .fval small { font-weight: 500; color: var(--muted); font-size: 12px; }
+
+  /* 비자 상태 뱃지 */
+  .visa-badge {
+    display: inline-block;
+    font-size: 11px; font-weight: 700; letter-spacing: .03em;
+    padding: 2px 7px; border-radius: 5px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  .visa-badge.ok         { color: #178A53; background: #E6F5EC; }
+  .visa-badge.renewal    { color: #B45309; background: #FEF3C7; }
+  .visa-badge.expired    { color: #B91C1C; background: #FEE2E2; }
+  .visa-badge.no_renewal { color: #515869; background: #EEF1F6; }
+
+  .persona-note {
+    border-top: 1px solid var(--line);
+    padding: 12px 24px;
+    display: flex; align-items: flex-start; gap: 12px;
+  }
+  .persona-note .nlabel {
+    font-size: 11px; font-weight: 700; letter-spacing: .03em;
+    color: var(--navy); text-transform: uppercase; flex-shrink: 0; padding-top: 2px;
+  }
+  .persona-note .ntext { font-size: 13.5px; color: var(--ink-2); line-height: 1.5; font-weight: 500; }
+
+  /* ---------- phone ---------- */
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 8px; height: 100%; justify-content: center; }
+  .phone {
+    /* 높이를 뷰포트에 맞춰 한 화면에 들어가게. 아이폰 비율(약 0.48) 유지. */
+    height: min(86vh, 760px);
+    aspect-ratio: 390 / 812;
+    width: auto;
+    background: #0A0D14;
+    border-radius: 7%/3.4%;
+    padding: 1.4%;
+    box-shadow: 0 8px 24px rgba(11,18,32,.16), 0 40px 80px -28px rgba(11,18,32,.4);
+    position: relative;
+    border: 1px solid #20242C;
+  }
+  .phone::before, .phone::after {
+    content: ""; position: absolute; background: #15181F; border-radius: 2px;
+  }
+  .phone::before { right: -2px; top: 21%; width: 3px; height: 10%; }
+  .phone::after  { left: -2px; top: 18.5%; width: 3px; height: 6.6%; box-shadow: 0 9.6vh 0 #15181F, 0 -4.9vh 0 0 #15181F; }
+
+  .screen {
+    width: 100%; height: 100%;
+    background: var(--screen-bg);
+    border-radius: 6%/2.9%;
+    overflow: hidden;
+    position: relative;
+    -webkit-mask-image: -webkit-radial-gradient(white, black);
+  }
+  .screen iframe { width: 100%; height: 100%; border: 0; display: block; background: var(--screen-bg); }
+
+  .island {
+    position: absolute; top: 11px; left: 50%; transform: translateX(-50%);
+    width: 120px; height: 34px; background: #000; border-radius: 20px;
+    z-index: 5; pointer-events: none;
+    display: flex; align-items: center; justify-content: flex-end; padding-right: 11px;
+  }
+  .island .cam {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #2a2f45, #000 70%);
+    box-shadow: inset 0 0 0 1px rgba(80,90,120,.5);
+  }
+
+  .screen-loading {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    background: var(--screen-bg);
+    transition: opacity .4s ease;
+  }
+  .screen-loading.hide { opacity: 0; pointer-events: none; }
+  .spinner {
+    width: 28px; height: 28px; border: 3px solid rgba(255,255,255,.14);
+    border-top-color: #5C7CD6; border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .screen-loading p { font-size: 13px; color: #7E879C; font-weight: 500; }
+
+  .phone-caption { font-size: 12.5px; color: var(--muted); font-weight: 500; display: flex; align-items: center; gap: 7px; }
+  .phone-caption a { color: var(--navy-soft); text-decoration: none; font-weight: 600; }
+  .phone-caption a:hover { text-decoration: underline; }
+
+  @media (max-width: 940px) {
+    .persona-top { flex-direction: column; align-items: stretch; }
+    .fields { grid-template-columns: repeat(2, 1fr); gap: 12px 0; }
+    .field { border-left: 0; padding-left: 0; }
+    .controls { flex-direction: column; align-items: stretch; }
+    .ctrl-divider { display: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+
+    <div class="topbar">
+      <div class="brand">
+        <div class="brand-mark">LR</div>
+        <div class="brand-name"><b>LifeRoad</b> AI Agent</div>
+        <div class="brand-sub">외국인 정착 도우미 시연 데모</div>
+      </div>
+      <div class="sync-pill" id="sync-pill"><span class="dot"></span><span id="sync-text">앱 동기화 대기</span></div>
+    </div>
+
+    <!-- 좌(컨트롤 + 카드 세로 2단) 우(아이폰) 2단 레이아웃 -->
+    <div class="layout">
+      <div class="left-col">
+        <!-- 컨트롤 영역: 페르소나 선택 + 답변 언어 선택 -->
+        <div class="controls">
+          <div class="ctrl-group">
+            <div class="ctrl-label">페르소나</div>
+            <select id="persona-select" onchange="applyControls()">
+              <option value="minh">베트남 / 응웬 반 민 (E-9)</option>
+              <option value="suman">네팔 / 수만 라이 (D-2)</option>
+            </select>
+          </div>
+          <div class="ctrl-divider"></div>
+          <div class="ctrl-group">
+            <div class="ctrl-label">답변 언어</div>
+            <select id="lang-select" onchange="applyControls()">
+              <option value="auto">자동 감지 (질문 언어 따라감)</option>
+              <option value="ko">한국어</option>
+              <option value="en">영어</option>
+              <option value="vi">베트남어</option>
+              <option value="ne">네팔어</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 페르소나 카드: postMessage로 실시간 업데이트 -->
+        <div class="persona" id="persona-card"></div>
+
+        <div class="phone-caption">
+          실제 구동 중인 앱 &nbsp;
+          <a id="new-tab-link" href="https://parksihyun28-liferoad-ai-agent-frontendapp-ens0se.streamlit.app/?embed=true&persona=minh" target="_blank" rel="noopener">새 탭에서 열기 ↗</a>
+        </div>
+      </div>
+
+      <div class="right-col">
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="island"><span class="cam"></span></div>
+            <div class="screen">
+              <div class="screen-loading" id="loading">
+                <div class="spinner"></div>
+                <p>AI Agent 불러오는 중…</p>
+              </div>
+              <iframe
+                id="app-frame"
+                src="https://parksihyun28-liferoad-ai-agent-frontendapp-ens0se.streamlit.app/?embed=true&persona=minh"
+                title="LifeRoad AI Agent"
+                allow="clipboard-read; clipboard-write; microphone; camera; geolocation"
+                onload="document.getElementById('loading').classList.add('hide')"></iframe>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<script>
+  /* =========================================================================
+     앱 BASE URL. 셸을 연 위치를 보고 자동 전환한다.
+     - localhost / 127.0.0.1 / file:// 로 열면 로컬 앱(http://localhost:8501)
+     - 그 외(실제 배포 호스팅)면 클라우드 배포 앱
+     로컬 시연과 배포 양쪽을 수정 없이 쓴다.
+     ========================================================================= */
+  const CLOUD_BASE = "https://parksihyun28-liferoad-ai-agent-frontendapp-ens0se.streamlit.app";
+  const LOCAL_BASE = "http://localhost:8501";
+  const _host = location.hostname;
+  const _isLocal = _host === "localhost" || _host === "127.0.0.1" || _host === "" || location.protocol === "file:";
+  const APP_BASE = _isLocal ? LOCAL_BASE : CLOUD_BASE;
+
+  /* =========================================================================
+     컨트롤 → iframe: 페르소나/언어 선택 변경 시 iframe src를 교체해 앱을 재로드한다.
+     ========================================================================= */
+  function buildAppUrl(personaId, lang) {
+    const params = new URLSearchParams({ embed: "true", persona: personaId, lang: lang });
+    return APP_BASE + "/?" + params.toString();
+  }
+
+  function applyControls() {
+    const personaId = document.getElementById("persona-select").value;
+    const lang      = document.getElementById("lang-select").value;
+    const url       = buildAppUrl(personaId, lang);
+
+    const frame    = document.getElementById("app-frame");
+    const loading  = document.getElementById("loading");
+    const newTabLk = document.getElementById("new-tab-link");
+
+    loading.classList.remove("hide");
+    frame.src  = url;
+    newTabLk.href = url;
+
+    // 동기화 상태 초기화 (새 앱 로드 중)
+    const pill = document.getElementById("sync-pill");
+    pill.classList.remove("live");
+    document.getElementById("sync-text").textContent = "앱 동기화 대기";
+  }
+
+  /* =========================================================================
+     페르소나 카드 렌더러.
+     p 키: code, name, en, nationality, visa, entry, exit, exitNote, note
+           visaExpiry, visaRenewal, visaMonthsLeft, visaStatus (앱에서 추가)
+     ========================================================================= */
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+  }
+
+  function visaBadge(status, label) {
+    if (!label) return "";
+    const cls = {
+      ok:         "ok",
+      renewal_window: "renewal",
+      expired:    "expired",
+      no_renewal: "no_renewal",
+    }[status] || "no_renewal";
+    return `<span class="visa-badge ${cls}">${esc(label)}</span>`;
+  }
+
+  function visaStatusLabel(status, monthsLeft) {
+    if (status === "expired")        return "만료됨";
+    if (status === "renewal_window") return `갱신 신청 가능 (${monthsLeft}개월 남음)`;
+    if (status === "no_renewal")     return "갱신 불필요";
+    if (status === "ok")             return `${monthsLeft}개월 남음`;
+    return "";
+  }
+
+  function renderPersona(p) {
+    const avatar = p.photo
+      ? `<div class="avatar"><img src="${esc(p.photo)}" alt=""></div>`
+      : `<div class="avatar">${esc((p.name || "?")[0])}</div>`;
+
+    const exitVal = p.exit
+      ? `${esc(p.exit)}${p.exitNote ? ` <small>(${esc(p.exitNote)})</small>` : ""}`
+      : "—";
+
+    // 비자 만료일 필드
+    const expiryVal = p.visaExpiry ? esc(p.visaExpiry) : "—";
+
+    // 갱신 신청 시작일 필드 (갱신이 필요한 경우에만 표시)
+    const renewalVal = p.visaRenewal ? esc(p.visaRenewal) : "—";
+
+    // 비자 상태 뱃지 (visaStatus와 visaMonthsLeft 활용)
+    const statusLabel = visaStatusLabel(p.visaStatus || "", p.visaMonthsLeft || 0);
+    const statusBadge = p.visaStatus
+      ? `<br><span style="margin-top:3px;display:inline-block">${visaBadge(p.visaStatus, statusLabel)}</span>`
+      : "";
+
+    document.getElementById("persona-card").innerHTML = `
+      <div class="persona-top">
+        ${avatar}
+        <div class="id-meta">
+          <div class="id-name">${esc(p.name)}${p.en ? `<span class="en">${esc(p.en)}</span>` : ""}</div>
+          ${p.code ? `<span class="id-code">${esc(p.code)}</span>` : ""}
+        </div>
+        <div class="fields">
+          <div class="field"><div class="flabel">국적</div><div class="fval">${esc(p.nationality) || "—"}</div></div>
+          <div class="field"><div class="flabel">비자</div><div class="fval">${esc(p.visa) || "—"}</div></div>
+          <div class="field"><div class="flabel">입국</div><div class="fval">${esc(p.entry) || "—"}</div></div>
+          <div class="field"><div class="flabel">출국 예정</div><div class="fval">${exitVal}</div></div>
+          <div class="field"><div class="flabel">비자 만료</div><div class="fval">${expiryVal}${statusBadge}</div></div>
+          <div class="field"><div class="flabel">갱신 신청</div><div class="fval">${renewalVal}</div></div>
+        </div>
+      </div>
+      ${p.note ? `<div class="persona-note"><span class="nlabel">시나리오</span><span class="ntext">${esc(p.note)}</span></div>` : ""}`;
+  }
+
+  /* =========================================================================
+     앱 → 데모 셸 실시간 동기화.
+     앱이 window.top.postMessage({type:"liferoad:persona", persona:{...}}) 를 보내면
+     카드를 갱신하고 컨트롤 드롭다운도 맞춰 업데이트한다.
+     ========================================================================= */
+  function markSynced() {
+    const pill = document.getElementById("sync-pill");
+    pill.classList.add("live");
+    document.getElementById("sync-text").textContent = "실시간 동기화 중";
+  }
+
+  window.addEventListener("message", (e) => {
+    const d = e.data;
+    if (!d || d.type !== "liferoad:persona" || !d.persona) return;
+    markSynced();
+    renderPersona(d.persona);
+  });
+
+  /* =========================================================================
+     초기 렌더: 컨트롤 기본값(minh)으로 카드 초기화.
+     앱이 뜨기 전에도 카드가 비어 있지 않도록 기본 데이터를 채운다.
+     ========================================================================= */
+  const DEFAULT_PERSONAS = {
+    minh: {
+      code: "VN", name: "응웬 반 민", en: "Nguyen Van Minh",
+      nationality: "베트남", visa: "E-9",
+      entry: "2022-03", exit: "2027-01", exitNote: "",
+      note: "베트남 E-9 근로자. 출국 1년 전. 반환일시금과 출국만기보험 수령 대상.",
+      visaExpiry: "", visaRenewal: "", visaMonthsLeft: 0, visaStatus: "",
+    },
+    suman: {
+      code: "NP", name: "수만 라이", en: "Suman Rai",
+      nationality: "네팔", visa: "D-2",
+      entry: "2023-03", exit: "2027-02", exitNote: "",
+      note: "네팔 D-2 유학생. Thin Filer. 잔고증명 예치금 보유. 대안신용 축적 대상.",
+      visaExpiry: "", visaRenewal: "", visaMonthsLeft: 0, visaStatus: "",
+    },
+  };
+
+  // 페이지 로드 시 기본 페르소나 카드를 먼저 그린다. 앱이 뜨면 postMessage로 덮어써진다.
+  renderPersona(DEFAULT_PERSONAS["minh"]);
+
+  // iframe 초기 src를 APP_BASE(로컬/배포 자동전환) 기준으로 셋한다.
+  // HTML에 박힌 하드코딩 클라우드 URL을 덮어써, localhost로 열면 로컬 앱이 뜬다.
+  (function initFrame() {
+    const personaId = document.getElementById("persona-select").value || "minh";
+    const lang      = document.getElementById("lang-select").value || "auto";
+    const url       = buildAppUrl(personaId, lang);
+    document.getElementById("app-frame").src = url;
+    const newTabLk  = document.getElementById("new-tab-link");
+    if (newTabLk) newTabLk.href = url;
+  })();
+</script>
+</body>
+</html>

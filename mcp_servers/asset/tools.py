@@ -8,8 +8,30 @@ from mcp_servers.asset import data
 
 
 def _won(n: int) -> str:
-    """원화 정수를 만 원 단위 한국어 문자열로."""
-    return f"{n:,}원"
+    """원화 정수를 자연스러운 한국어 금액 문자열로.
+    만 원 미만은 '원', 만 원 이상은 '만 원', 억 이상은 '억 ...만 원'으로 적는다.
+    만 원 미만 자투리(천원대)가 있으면 함께 표기해 정확도를 지킨다.
+    영어식 '백만/천만' 표기나 raw 자릿수 나열('29,700,000원')을 피한다.
+    예: 5000 -> '5,000원', 35_500 -> '3만 5,500원', 29_700_000 -> '2,970만 원',
+        129_700_000 -> '1억 2,970만 원'."""
+    n = int(round(n))
+    sign = "-" if n < 0 else ""
+    n = abs(n)
+    if n < 10_000:
+        return f"{sign}{n:,}원"
+    eok, rem = divmod(n, 100_000_000)  # 억
+    man = rem // 10_000                 # 만
+    won = rem % 10_000                  # 만 원 미만 자투리
+    parts = []
+    if eok:
+        parts.append(f"{eok:,}억")
+    if man:
+        parts.append(f"{man:,}만")
+    head = " ".join(parts)
+    # 만 원 미만 자투리: 억 단위 큰 금액에선 무시(노이즈), 1억 미만에선 살린다.
+    if won and not eok:
+        return f"{sign}{head} {won:,}원"
+    return f"{sign}{head} 원"
 
 
 def collateral_calc(persona_id: str) -> dict:
