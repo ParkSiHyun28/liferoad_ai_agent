@@ -971,6 +971,8 @@ if prompt:
     _stamp_intro_if_needed(persona_id, _chat_lang)
     st.session_state["messages"].append({"role": "user_display", "text": prompt})
     with st.chat_message("user"):
+        # 방금 입력한 질문에 앵커를 박아, 답변 생성 후 이 위치에 화면을 고정한다.
+        st.markdown("<div id='lr-scroll-anchor'></div>", unsafe_allow_html=True)
         st.write(prompt)
 
     # 응답 언어 확정. ?lang=auto(기본)이면 질문 텍스트의 언어를 감지해 그 언어로 답한다.
@@ -1062,19 +1064,30 @@ if prompt:
         fallback_chat = start_action_labels(persona_id, reply_lang, exclude_tools=_completed)
         next_labels = fallback_chat[:2]
 
-    st.session_state["messages"].append(
-        {
-            "role": "assistant_display", "text": body, "steps": steps,
-            "lang": reply_lang, "used_tools": used_tools, "persona_id": persona_id,
-            "next_labels": next_labels, "is_done": is_done,
-        }
-    )
-    # rerun 후 화면을 맨 아래가 아니라 방금 누른 '[선택]'(마지막 user 메시지)에 맞춘다.
-    # 긴 답변에서 위로 다시 스크롤하지 않아도 질문→답변을 자연히 읽게 한다.
-    st.session_state["_scroll_to_action"] = True
-    # 답변을 메시지로 확정한 뒤 한 번 더 그린다. 그래야 답변 바로 아래에
-    # '다음 행동' 선택지 버튼이 정상 위젯으로 렌더된다(스트리밍 중 인라인 버튼은 key 흐름이 꼬인다).
-    st.rerun()
+    _assistant_msg = {
+        "role": "assistant_display", "text": body, "steps": steps,
+        "lang": reply_lang, "used_tools": used_tools, "persona_id": persona_id,
+        "next_labels": next_labels, "is_done": is_done,
+    }
+    st.session_state["messages"].append(_assistant_msg)
+
+    # rerun 없이 이 패스에서 답변을 바로 그린다. rerun을 하면 화면이 재구성되며
+    # streamlit이 맨 아래로 스크롤했다가 앵커로 되올라오는 '튐'이 생긴다.
+    # 직전 질문 바로 아래에 답변을 이어 그려, 화면 점프 없이 자연히 읽히게 한다.
+    _idx = len(st.session_state["messages"]) - 1
+    with st.chat_message("assistant"):
+        if steps:
+            with st.expander(f"처리 과정 {len(steps)}단계", expanded=False):
+                for i, s in enumerate(steps, 1):
+                    render_step(i, s["name"], s["args"], s["output"])
+        st.write(body)
+        _has_completed = bool(st.session_state.get("completed_tools"))
+        render_actions(
+            next_labels,
+            reply_lang,
+            msg_key=str(_idx),
+            show_end_button=(is_done and _has_completed),
+        )
 
 
 # rerun 후 화면 스크롤 위치 보정.
@@ -1097,17 +1110,24 @@ if st.session_state.pop("_scroll_to_action", False):
           }
           return null;
         }
-        // 앵커를 화면 위쪽에 고정한다. 스트리밍 직후 streamlit이 맨 아래로 당기는 것을
-        // 여러 번 덮어써(반복 호출) 최종 위치를 '[선택]' 블록으로 맞춘다.
-        function pin(n) {
+        // 앵커를 화면 위쪽에 즉시(instant) 고정한다. streamlit이 맨 아래로 당기는 것을
+        // 애니메이션 없이 곧바로 덮어써 '튐'(내려갔다 올라옴)이 보이지 않게 한다.
+        // requestAnimationFrame으로 streamlit 스크롤 직후 매 프레임 선점하고,
+        // 일정 시간 동안 반복해 늦게 오는 auto-scroll까지 잡는다.
+        function pin() {
           const doc = findAnchorDoc();
           const el = doc && doc.getElementById('lr-scroll-anchor');
           if (el) {
-            el.scrollIntoView({behavior: n < 2 ? 'auto' : 'smooth', block: 'start'});
+            el.scrollIntoView({behavior: 'instant', block: 'start'});
           }
-          if (n < 8) setTimeout(() => pin(n + 1), 120);
         }
-        setTimeout(() => pin(0), 60);
+        let frames = 0;
+        function loop() {
+          pin();
+          frames += 1;
+          if (frames < 40) requestAnimationFrame(loop);
+        }
+        requestAnimationFrame(loop);
         </script>
         """,
         height=0,
