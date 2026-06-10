@@ -164,7 +164,7 @@ label, [data-testid="stWidgetLabel"] p {
   box-shadow: none !important;
 }
 [data-testid="stChatInput"] [data-baseweb="textarea"] {
-  border-radius: 26px !important;
+  border-radius: 12px !important;
   border: 1px solid var(--lr-line-2) !important;
   background: var(--lr-surface) !important;
   box-shadow: none !important;
@@ -178,6 +178,10 @@ label, [data-testid="stWidgetLabel"] p {
   font-family: "Pretendard", sans-serif !important;
   color: var(--lr-ink) !important;
   background: transparent !important;
+}
+/* 전송 버튼도 입력창과 같은 살짝 둥근 네모로 맞춘다(전역 버튼의 둥근 알약 모양 덮어쓰기). */
+[data-testid="stChatInput"] button {
+  border-radius: 12px !important;
 }
 
 /* 카드형 컨테이너 */
