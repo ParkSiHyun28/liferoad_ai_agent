@@ -13,6 +13,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 # 키 로딩은 반드시 llm_provider import 전에 끝낸다.
@@ -153,11 +154,31 @@ label, [data-testid="stWidgetLabel"] p {
 }
 [data-testid="stChatMessage"]:has([data-testid="stChatMessageAvatarUser"]) { background: var(--lr-surface2); }
 [data-testid="stChatMessage"] p { color: var(--lr-ink) !important; }
-[data-testid="stChatInput"] {
-  border-radius: 999px !important; border: 1px solid var(--lr-line-2) !important;
-  background: var(--lr-surface) !important;
+/* 채팅 입력창: 겹치는 테두리를 모두 끄고 baseweb textarea 한 겹에만 둥근 테두리를 준다.
+   여러 wrapper에 테두리/배경이 겹쳐 모서리가 깨지던 문제를 막는다. */
+[data-testid="stChatInput"],
+[data-testid="stChatInput"] > div,
+[data-testid="stChatInput"] [data-baseweb="base-input"] {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
 }
-[data-testid="stChatInput"] textarea { font-family: "Pretendard", sans-serif !important; color: var(--lr-ink) !important; }
+[data-testid="stChatInput"] [data-baseweb="textarea"] {
+  border-radius: 26px !important;
+  border: 1px solid var(--lr-line-2) !important;
+  background: var(--lr-surface) !important;
+  box-shadow: none !important;
+  overflow: hidden;
+}
+[data-testid="stChatInput"] [data-baseweb="textarea"]:focus-within {
+  border-color: var(--lr-accent) !important;
+  box-shadow: 0 0 0 3px rgba(20,38,79,.12) !important;
+}
+[data-testid="stChatInput"] textarea {
+  font-family: "Pretendard", sans-serif !important;
+  color: var(--lr-ink) !important;
+  background: transparent !important;
+}
 
 /* 카드형 컨테이너 */
 [data-testid="stVerticalBlockBorderWrapper"] {
@@ -845,6 +866,13 @@ last_assistant_idx = max(
     (i for i, m in enumerate(st.session_state["messages"]) if m["role"] == "assistant_display"),
     default=-1,
 )
+# 방금 누른 선택(또는 직접 입력) 메시지로 스크롤을 맞추기 위해 마지막 user 메시지 위치를 찾는다.
+# rerun 후 화면이 맨 아래로 튀지 않고 '[선택] ...' 블록이 보이는 위치에 머물게 한다.
+last_user_idx = max(
+    (i for i, m in enumerate(st.session_state["messages"])
+     if m["role"] in ("user_action", "user_display")),
+    default=-1,
+)
 for idx, m in enumerate(st.session_state["messages"]):
     if m["role"] == "intro_display":
         # 박제된 AI 인트로. 버튼을 누른 뒤 재생 루프가 이것을 그린다.
@@ -853,11 +881,15 @@ for idx, m in enumerate(st.session_state["messages"]):
         # 버튼은 이미 사용된 상태이므로 다시 그리지 않는다.
     elif m["role"] == "user_display":
         with st.chat_message("user"):
+            if idx == last_user_idx:
+                st.markdown("<div id='lr-scroll-anchor'></div>", unsafe_allow_html=True)
             st.write(m["text"])
     elif m["role"] == "user_action":
         # 사용자가 선택지 버튼으로 고른 행동. 일반 질문과 구분되게 표시한다.
         with st.chat_message("user"):
-            st.markdown(f"<span style='color:#E7B85C'>[선택]</span> {m['text']}", unsafe_allow_html=True)
+            if idx == last_user_idx:
+                st.markdown("<div id='lr-scroll-anchor'></div>", unsafe_allow_html=True)
+            st.markdown(f"<span style='color:#14264F;font-weight:700'>[선택]</span> {m['text']}", unsafe_allow_html=True)
     elif m["role"] == "assistant_display":
         with st.chat_message("assistant"):
             if m.get("steps"):
@@ -996,13 +1028,11 @@ if prompt:
                     ):
                         if not chunk:
                             continue
-                        if not steps_shown:
-                            render_steps_panel()  # 첫 토큰 시점엔 tool 단계가 끝나 있다.
-                            steps_shown = True
                         text += chunk
-                        # 스트리밍 중에는 <<NEXT>> 마커와 <<DONE>> 마커 이후를 숨기고 본문만 흘린다.
-                        _preview = split_answer_and_actions(parse_done_marker(strip_emoji(text))[0])[0]
-                        answer_box.markdown(_preview)
+                        # 스트리밍 중에는 본문을 라이브로 그리지 않는다.
+                        # 라이브 갱신은 매 토큰마다 화면을 맨 아래로 당겨(streamlit auto-scroll)
+                        # 방금 누른 '[선택]' 블록을 가린다. 누적만 하고 완료 후 rerun 재생 루프가
+                        # 앵커 위치에 맞춰 한 번에 그린다(스크롤 안정 우선).
                 if not steps_shown:
                     render_steps_panel()
                 text = strip_emoji(text)
@@ -1068,6 +1098,46 @@ if prompt:
             "next_labels": next_labels, "is_done": is_done,
         }
     )
+    # rerun 후 화면을 맨 아래가 아니라 방금 누른 '[선택]'(마지막 user 메시지)에 맞춘다.
+    # 긴 답변에서 위로 다시 스크롤하지 않아도 질문→답변을 자연히 읽게 한다.
+    st.session_state["_scroll_to_action"] = True
     # 답변을 메시지로 확정한 뒤 한 번 더 그린다. 그래야 답변 바로 아래에
     # '다음 행동' 선택지 버튼이 정상 위젯으로 렌더된다(스트리밍 중 인라인 버튼은 key 흐름이 꼬인다).
     st.rerun()
+
+
+# rerun 후 화면 스크롤 위치 보정.
+# 버튼 선택/입력으로 새 답변이 생성되면 streamlit은 기본적으로 맨 아래로 스크롤한다.
+# 그러면 긴 답변에서 방금 누른 '[선택]' 블록이 위로 밀려, 다시 올려야 질문→답변을 읽는다.
+# 이를 막기 위해 마지막 user 메시지에 박은 앵커(#lr-scroll-anchor)를 화면 상단 근처로 보낸다.
+# 컴포넌트 iframe에서 parent(streamlit 메인 문서)의 앵커를 찾아 스크롤한다.
+if st.session_state.pop("_scroll_to_action", False):
+    components.html(
+        """
+        <script>
+        // 컴포넌트 iframe에서 streamlit 메인 문서를 찾는다.
+        // 보통 window.parent가 streamlit 앱 문서다. 못 찾으면 top까지 올라가며 앵커를 탐색한다.
+        function findAnchorDoc() {
+          const cands = [];
+          try { if (window.parent) cands.push(window.parent.document); } catch (e) {}
+          try { if (window.top && window.top !== window.parent) cands.push(window.top.document); } catch (e) {}
+          for (const d of cands) {
+            try { if (d && d.getElementById('lr-scroll-anchor')) return d; } catch (e) {}
+          }
+          return null;
+        }
+        // 앵커를 화면 위쪽에 고정한다. 스트리밍 직후 streamlit이 맨 아래로 당기는 것을
+        // 여러 번 덮어써(반복 호출) 최종 위치를 '[선택]' 블록으로 맞춘다.
+        function pin(n) {
+          const doc = findAnchorDoc();
+          const el = doc && doc.getElementById('lr-scroll-anchor');
+          if (el) {
+            el.scrollIntoView({behavior: n < 2 ? 'auto' : 'smooth', block: 'start'});
+          }
+          if (n < 8) setTimeout(() => pin(n + 1), 120);
+        }
+        setTimeout(() => pin(0), 60);
+        </script>
+        """,
+        height=0,
+    )
