@@ -793,6 +793,9 @@ def run_agent_turn(user_intent: str, reply_lang: str, display_user: str, is_acti
         "lang": reply_lang, "used_tools": used, "persona_id": persona_id,
         "next_labels": next_labels, "is_done": is_done,
     })
+    # rerun 후 화면을 방금 누른 '[선택]'(마지막 user 메시지)에 맞춘다.
+    # 버튼 클릭도 직접 입력과 동일하게 스크롤을 고정해 답변이 맨 아래로 가려지지 않게 한다.
+    st.session_state["_scroll_to_action"] = True
 
 
 # 능동 모드 — 실행 후 결과를 session_state에 저장해 rerun 후에도 재렌더된다(P2-2).
@@ -998,71 +1001,39 @@ if prompt:
             })
 
     error_occurred_chat = False
-    with st.chat_message("assistant"):
-        proc_box = st.container()  # 처리 과정을 답변 위에 둔다
-
-        def render_steps_panel():
-            """tool 단계가 끝난 뒤 처리 과정을 답변 위에 그린다."""
-            with proc_box:
-                if steps:
-                    st.markdown("**처리 과정**")
-                    for i, s in enumerate(steps, 1):
-                        render_step(i, s["name"], s["args"], s["output"])
-                    st.markdown("**답변**")
-
-        # Claude는 진짜 토큰 스트리밍을 지원해 글자가 흐른다(체감 속도 개선).
-        # gemini의 OpenAI 호환 엔드포인트는 토큰 스트리밍을 사실상 안 해(응답을 한꺼번에 보냄)
-        # 오히려 느리다. 그래서 Claude만 스트리밍, 나머지는 빠른 비스트리밍으로 분기한다.
-        if PROVIDER == "claude":
-            answer_box = st.empty()
-            text = ""
-            steps_shown = False
-            try:
-                with st.spinner("에이전트가 처리 중..."):
-                    for chunk in run_chat_stream(
-                        user_text,
-                        build_system_prompt(reply_lang, persona_id),
-                        run_tool,
-                        on_step=on_step,
-                        history=prior_history,
-                    ):
-                        if not chunk:
-                            continue
+    # 이 패스에서는 답변을 화면에 그리지 않는다. LLM 호출과 결과 수집만 하고
+    # messages에 저장한 뒤 rerun한다. 재생 루프가 인트로→[선택]→답변 순서로 한 번에 그린다.
+    # 답변을 이 자리(chat_input 아래)에 즉석으로 그리면 화면이 길어지며 streamlit이
+    # 맨 아래로 auto-scroll해, 방금 누른 '[선택]' 블록이 가려진다. 이를 원천 차단한다.
+    text = ""
+    with st.spinner("에이전트가 처리 중..."):
+        try:
+            if PROVIDER == "claude":
+                for chunk in run_chat_stream(
+                    user_text,
+                    build_system_prompt(reply_lang, persona_id),
+                    run_tool,
+                    on_step=on_step,
+                    history=prior_history,
+                ):
+                    if chunk:
                         text += chunk
-                        # 스트리밍 중에는 본문을 라이브로 그리지 않는다.
-                        # 라이브 갱신은 매 토큰마다 화면을 맨 아래로 당겨(streamlit auto-scroll)
-                        # 방금 누른 '[선택]' 블록을 가린다. 누적만 하고 완료 후 rerun 재생 루프가
-                        # 앵커 위치에 맞춰 한 번에 그린다(스크롤 안정 우선).
-                if not steps_shown:
-                    render_steps_panel()
-                text = strip_emoji(text)
-                answer_box.markdown(split_answer_and_actions(parse_done_marker(text)[0])[0])
-            except Exception as e:
-                print(repr(e), file=sys.stderr)
-                error_occurred_chat = True
-                err_msg = _korean_error_msg(e)
-                # 누적 텍스트가 있으면 부분 답변을 살리고 중단 안내를 붙인다.
-                if text.strip():
-                    text = strip_emoji(text) + "\n\n(응답이 일시 중단되었습니다)"
-                else:
-                    text = err_msg
-                answer_box.markdown(split_answer_and_actions(text)[0])
-        else:
-            with st.spinner("에이전트가 처리 중..."):
-                try:
-                    text = run_chat(
-                        user_text,
-                        build_system_prompt(reply_lang, persona_id),
-                        run_tool,
-                        on_step=on_step,
-                        history=prior_history,
-                    )
-                except Exception as e:
-                    print(repr(e), file=sys.stderr)
-                    error_occurred_chat = True
-                    text = _korean_error_msg(e)
-            render_steps_panel()
-            st.write(split_answer_and_actions(text)[0])
+            else:
+                text = run_chat(
+                    user_text,
+                    build_system_prompt(reply_lang, persona_id),
+                    run_tool,
+                    on_step=on_step,
+                    history=prior_history,
+                )
+            text = strip_emoji(text)
+        except Exception as e:
+            print(repr(e), file=sys.stderr)
+            error_occurred_chat = True
+            if text.strip():
+                text = strip_emoji(text) + "\n\n(응답이 일시 중단되었습니다)"
+            else:
+                text = _korean_error_msg(e)
 
     # 오류로 끝난 turn은 messages에 저장하지 않는다(영문 예외가 영구 박제되지 않게).
     if error_occurred_chat:
