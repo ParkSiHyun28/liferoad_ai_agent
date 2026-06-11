@@ -39,9 +39,32 @@ if [ -z "$PYBIN" ]; then
       find_python
     fi
   else
-    echo "  자동 설치 도구(Homebrew)가 없어 직접 설치가 필요합니다."
-    echo "  설치 페이지를 엽니다. 설치 후 이 파일을 다시 더블클릭하세요."
-    open "https://www.python.org/downloads/release/python-3127/"
+    echo "  자동 설치 도구(Homebrew)가 없습니다."
+    printf "  Homebrew를 먼저 설치하고 파이썬까지 자동으로 깔까요? (y/n) "
+    read -r ANS2
+    if [ "$ANS2" = "y" ] || [ "$ANS2" = "Y" ]; then
+      echo ""
+      echo "  Homebrew 설치 중... 중간에 [관리자 비밀번호]를 물으면 입력하세요."
+      echo "  (비밀번호는 화면에 안 보입니다. 입력 후 Enter)"
+      echo ""
+      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+      # 설치 직후 같은 세션에서 brew를 PATH에 올린다 (Apple Silicon / Intel 경로 모두 시도)
+      if [ -x /opt/homebrew/bin/brew ]; then eval "$(/opt/homebrew/bin/brew shellenv)"
+      elif [ -x /usr/local/bin/brew ]; then eval "$(/usr/local/bin/brew shellenv)"; fi
+      if command -v brew >/dev/null 2>&1; then
+        echo "  파이썬 3.12 설치 중..."
+        brew install python@3.12
+        BREW_PY="$(brew --prefix)/opt/python@3.12/libexec/bin"
+        [ -d "$BREW_PY" ] && export PATH="$BREW_PY:$PATH"
+        find_python
+      else
+        echo "  [오류] Homebrew 설치가 끝나지 않았습니다. 파이썬을 직접 설치해 주세요."
+        open "https://www.python.org/downloads/release/python-3127/"
+      fi
+    else
+      echo "  파이썬 설치 페이지를 엽니다. 설치 후 이 파일을 다시 더블클릭하세요."
+      open "https://www.python.org/downloads/release/python-3127/"
+    fi
   fi
 fi
 
