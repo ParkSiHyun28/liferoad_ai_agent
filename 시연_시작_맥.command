@@ -13,17 +13,42 @@ echo "============================================="
 echo ""
 
 # 1) 파이썬 찾기 (python3 우선)
+find_python() {
+  if command -v python3 >/dev/null 2>&1; then PYBIN="python3"
+  elif command -v python >/dev/null 2>&1; then PYBIN="python"
+  else PYBIN=""; fi
+}
+
 PYBIN=""
-if command -v python3 >/dev/null 2>&1; then
-  PYBIN="python3"
-elif command -v python >/dev/null 2>&1; then
-  PYBIN="python"
+find_python
+
+# 파이썬이 없으면: Homebrew 있으면 자동설치 시도, 없으면 안내
+if [ -z "$PYBIN" ]; then
+  echo "[알림] 파이썬이 설치돼 있지 않습니다."
+  echo ""
+  if command -v brew >/dev/null 2>&1; then
+    echo "  Homebrew가 있습니다. 파이썬 3.12를 자동으로 설치할 수 있습니다."
+    printf "  지금 설치할까요? (y/n) "
+    read -r ANS
+    if [ "$ANS" = "y" ] || [ "$ANS" = "Y" ]; then
+      echo "  설치 중... (몇 분 걸릴 수 있습니다)"
+      brew install python@3.12
+      # brew 파이썬 경로를 PATH 앞에 추가
+      BREW_PY="$(brew --prefix)/opt/python@3.12/libexec/bin"
+      [ -d "$BREW_PY" ] && export PATH="$BREW_PY:$PATH"
+      find_python
+    fi
+  else
+    echo "  자동 설치 도구(Homebrew)가 없어 직접 설치가 필요합니다."
+    echo "  설치 페이지를 엽니다. 설치 후 이 파일을 다시 더블클릭하세요."
+    open "https://www.python.org/downloads/release/python-3127/"
+  fi
 fi
 
+# 자동설치 시도 후에도 없으면 종료
 if [ -z "$PYBIN" ]; then
-  echo "[오류] 파이썬이 설치돼 있지 않습니다."
   echo ""
-  echo "  아래 주소에서 Python 3.12를 설치한 뒤 이 파일을 다시 실행하세요:"
+  echo "  파이썬을 설치한 뒤 이 파일을 다시 실행하세요:"
   echo "  https://www.python.org/downloads/"
   echo ""
   echo "  (창을 닫으려면 아무 키나 누르세요)"
