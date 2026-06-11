@@ -236,7 +236,12 @@ async function sendTurn(intent, isAction, displayText) {
   history.push({ role: "assistant", content: body });
 
   // 답변이 끝난 뒤에야 근거 카드를 그린다(판단→근거 순서).
-  cards.forEach(c => addCard(aiWrap, c));
+  // tool 카드 텍스트는 한국어 원본이다. 답변 언어가 한국어가 아니면 본문이
+  // 이미 그 언어로 같은 내용을 설명하므로, 한국어 카드를 숨겨 언어 혼용을 막는다.
+  const replyLang = finalBody && finalBody.lang ? finalBody.lang : (curLang === "auto" ? "ko" : curLang);
+  if (replyLang === "ko") {
+    cards.forEach(c => addCard(aiWrap, c));
+  }
 
   if (finalBody) {
     if (finalBody.completed_tools) completedTools = finalBody.completed_tools;
