@@ -54,7 +54,6 @@ function visaStatusLabel(status, monthsLeft) {
   return "";
 }
 function renderPersona(p) {
-  const avatar = `<div class="avatar">${esc((p.name || "?")[0])}</div>`;
   const exitVal = p.exit ? esc(p.exit) : "—";
   const expiryVal = p.visaExpiry ? esc(p.visaExpiry) : "—";
   const renewalVal = p.visaRenewal ? esc(p.visaRenewal) : "—";
@@ -64,7 +63,6 @@ function renderPersona(p) {
     : "";
   document.getElementById("persona-card").innerHTML = `
     <div class="persona-top">
-      ${avatar}
       <div class="id-meta">
         <div class="id-name">${esc(p.name)}${p.en ? `<span class="en">${esc(p.en)}</span>` : ""}</div>
         ${p.code ? `<span class="id-code">${esc(p.code)}</span>` : ""}
