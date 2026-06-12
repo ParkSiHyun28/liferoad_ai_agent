@@ -12,3 +12,23 @@ bench_providers.py
 
 # brainstorm visual companion
 .superpowers/
+
+# 시연 녹화 원본 및 부속 미디어 (대용량, 깃 비포함. 영상은 데이콘에 직접 업로드)
+*.mov
+*.mp4
+*.mp3
+*.srt
+
+# 작업 기록 및 임시 스크립트 (결과물 아님, 로컬에만 보관)
+QA_REPORT*.md
+fix_docx.py
+fix_pptx*.py
+
+# 산출물 백업본 (수정 전 백업, 깃 비포함)
+*_백업.docx
+*_백업.pptx
+기능명세서_수정전_*.docx
+발표자료_수정전_*.pptx
+
+# 제출 문서 (발표 pptx, 기능명세서 docx 등. 데이콘에 직접 제출. 깃은 코드 구현 증빙용)
+폴인포린_제출자료/
