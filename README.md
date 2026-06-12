@@ -10,10 +10,15 @@
 
 외국인 페르소나(베트남 E-9 근로자 / 네팔 D-2 유학생)에게 **묻기 전에 먼저** 금융 손실과 마감을 잡아주는 에이전트다. 챗봇이 아니라 "능동 점검 + 비자별 정밀 자문 + 서류 대리작성"을 한다.
 
-세 부문이 각각 독립 모듈이고, 공용 Streamlit 프론트 하나가 LLM을 통해 부문 tool을 호출한다.
+세 부문이 각각 독립 모듈이고, 정적 웹 UI(`web/`)가 FastAPI 백엔드(`backend/`)를 통해 LLM과 부문 tool을 호출한다.
 
 ```
-frontend/        공용 Streamlit 챗 UI + LLM 공급자 스위치
+web/             정적 챗 UI (HTML/CSS/JS). 브라우저가 직접 띄운다
+backend/         FastAPI 서버 (/chat, /personas, /intro). 실제 런타임 진입점
+  main.py        엔드포인트
+  core.py        streamlit 무관 순수 코어 (마커 분리, tool 디스패치, 인트로 추천)
+frontend/
+  llm_provider.py  공용 LLM 호출 엔진 + 공급자 스위치 (backend가 직접 import한다)
 shared/
   personas.py    페르소나 2명 (전 부문 공용, 동결)
   system_prompt.py  공용 시스템 프롬프트
@@ -22,9 +27,12 @@ mcp_servers/
   asset/         자산 부문 (구현 완료, 팀 표준 예시)
   docs/          서류행정 부문 (구현 완료)
   <내 부문>/      여기에 폴더만 넣으면 자동 연결된다
+simulation/      멀티에이전트 시뮬레이션 (독립 정적 HTML)
 CONTRACT.md      tool 인터페이스 규약 (부문 만들 때 필독)
 AGENT_BRIEF.md   AI에게 부문 작업을 맡길 때 주는 지시문
 ```
+
+> `frontend/` 폴더엔 LLM 엔진 한 파일만 남아 있다. 이름은 frontend지만 UI가 아니라 backend와 테스트가 함께 쓰는 공용 모듈이다. 실제 화면은 `web/`다.
 
 ---
 
@@ -35,10 +43,20 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env     # 키 입력 (아래 3번 참고)
-streamlit run frontend/app.py
 ```
 
-브라우저가 열리면 사이드바에서 페르소나를 고르고 "능동 점검 실행"을 누르거나 대화창에 질문한다.
+서버는 백엔드(FastAPI)와 정적 프론트 둘을 같이 띄운다.
+
+```bash
+# 백엔드 (포트 8001)
+.venv/bin/uvicorn backend.main:app --port 8001 --reload &
+# 정적 프론트 (포트 8000)
+.venv/bin/python -m http.server 8000 -d web
+```
+
+그다음 브라우저에서 `http://localhost:8000/` 을 연다.
+
+**더 쉬운 방법**: 팀원은 Finder에서 `시연_서버_켜기.command`(맥) 또는 `시연_시작_윈도우.bat`(윈도우)를 더블클릭하면 위 두 서버가 한 번에 뜬다. 자세한 안내는 `팀원_실행안내.md`.
 
 ### 테스트
 ```bash
@@ -71,7 +89,7 @@ python -m pytest -v
 
 ## 4. 내 부문을 붙이는 법 (★ 자동 연결)
 
-**핵심: `mcp_servers/` 아래에 규약대로 만든 폴더를 넣기만 하면 앱 재시작 시 자동으로 연결된다.** `registry.py`나 `app.py`를 손댈 필요 없다.
+**핵심: `mcp_servers/` 아래에 규약대로 만든 폴더를 넣기만 하면 서버 재시작 시 자동으로 연결된다.** `registry.py`나 `backend/`를 손댈 필요 없다.
 
 ### 절차
 1. 이 repo를 clone 한다. (GitHub: `ParkSiHyun28/liferoad_ai_agent`)
@@ -104,33 +122,28 @@ python -m pytest -v
 
 ---
 
-## 6. 온라인 배포 (Streamlit Community Cloud)
+## 6. 온라인 배포 (백엔드 Render + 정적 프론트)
+
+구조상 둘을 따로 올린다. 백엔드는 FastAPI 서버, 프론트는 정적 파일이다.
 
 ### 배포 전 확인
-- `.streamlit/secrets.example.toml`을 열어 필요한 키 목록을 파악한다.
-- `.env`나 `secrets.toml`이 커밋에 포함되지 않았는지 `git status`로 확인한다.
+- `.env.example`을 열어 필요한 키 목록을 파악한다.
+- `.env`가 커밋에 포함되지 않았는지 `git status`로 확인한다(`.gitignore`로 막혀 있다).
 
-### 단계별 배포 절차
-
+### 백엔드 (Render)
 1. **GitHub에 push**
    ```bash
    git push origin main
    ```
+2. https://render.com 에서 New Web Service → `ParkSiHyun28/liferoad_ai_agent` 선택.
+3. Start Command: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+4. Environment에 키 입력: `LLM_PROVIDER`, `GEMINI_API_KEY`(또는 본선용 `ANTHROPIC_API_KEY`).
+5. 배포되면 `https://<서비스명>.onrender.com` 형태의 API URL이 생긴다.
 
-2. **Streamlit Cloud에서 앱 생성**
-   - https://share.streamlit.io 에 접속한다.
-   - "New app" 클릭 후 `ParkSiHyun28/liferoad_ai_agent` 리포지토리를 선택한다.
-   - 브랜치: `main` / 메인 파일 경로: `frontend/app.py`
+### 정적 프론트
+- `web/config.js`의 `PROD_API`를 위에서 받은 Render API URL로 맞춘다.
+- `web/` 폴더를 정적 호스팅(Cloudflare Pages 등)에 올린다. 빌드 과정 없이 그대로 서빙한다.
 
-3. **Secrets 입력**
-   - "Advanced settings" 탭 안의 "Secrets" 섹션을 클릭한다.
-   - `.streamlit/secrets.example.toml` 내용을 복사한다.
-   - 플레이스홀더(`AIza_여기에_실제_키` 등)를 실제 Gemini API 키로 교체한 뒤 붙여넣는다.
-
-4. **Deploy 클릭**
-   - 빌드가 끝나면 `https://<앱이름>.streamlit.app` 형태의 공개 URL이 생성된다.
-
-5. **본선(Claude) 전환**
-   - Streamlit Cloud 앱 설정의 Secrets 탭에서 `LLM_PROVIDER = "claude"`로 바꾼다.
-   - `ANTHROPIC_API_KEY = "sk-ant-..."` 줄을 추가한다.
-   - Save 후 Reboot App을 누르면 즉시 반영된다.
+### 본선(Claude) 전환
+- Render Environment에서 `LLM_PROVIDER = claude`로 바꾸고 `ANTHROPIC_API_KEY = sk-ant-...`를 추가한다.
+- 저장 후 재배포하면 반영된다.

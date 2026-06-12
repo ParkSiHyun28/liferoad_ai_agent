@@ -15,7 +15,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from frontend.app import (
+from backend.core import (
     TODAY,
     _korean_error_msg,
     parse_done_marker,

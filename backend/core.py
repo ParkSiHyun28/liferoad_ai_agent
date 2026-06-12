@@ -393,3 +393,21 @@ def persona_card(p: dict) -> dict:
         card["visaStatus"] = ""
         card["visaRenewalNeeded"] = False
     return card
+
+
+def _korean_error_msg(e: Exception) -> str:
+    """예외를 종류별 한국어 안내 문구로 변환한다."""
+    try:
+        import anthropic as _ant
+        if isinstance(e, _ant.RateLimitError):
+            return "지금 요청이 몰려 잠시 후 다시 시도해 주세요."
+        if isinstance(e, (_ant.APITimeoutError, _ant.APIConnectionError)):
+            return "응답이 지연됩니다. 잠시 후 다시 시도해 주세요."
+    except ImportError:
+        pass
+    msg = str(e)
+    if "API 키" in msg or "ANTHROPIC_API_KEY" in msg or "GEMINI_API_KEY" in msg or "key" in msg.lower():
+        return "API 키 설정이 필요합니다. 환경변수(ANTHROPIC_API_KEY)를 확인해 주세요."
+    if "RuntimeError" in type(e).__name__ and "키" in msg:
+        return "API 키 설정이 필요합니다. 환경변수(ANTHROPIC_API_KEY)를 확인해 주세요."
+    return "일시적인 오류가 발생했습니다. 다시 시도해 주세요."
